@@ -22,6 +22,7 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
     private ImGuiController? _imgui;
     private MeshBuffer? _terrainMesh;
     private MeshBuffer? _brushMesh;
+    private MeshBuffer? _characterPreviewMesh;
     private Vector2 _lastMouse;
     private Vector2 _mouse;
     private bool _leftMouseDown;
@@ -126,7 +127,9 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
         }
 
         if (_meshDirty) RebuildTerrainMesh();
+        UpdateCursor();
         RebuildBrushMesh();
+        RebuildCharacterPreviewMesh();
         HandleShortcuts();
         UpdateTitle();
         _lastMouse = _mouse;
@@ -167,6 +170,12 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
         _shader.SetVector("uColor", new Vector4(1.0f, 0.85f, 0.25f, 1.0f));
         _shader.SetInt("uUseLighting", 0);
         _brushMesh.DrawLines();
+        if (_keys.Contains(Key.T) && _characterPreviewMesh is not null)
+        {
+            _shader.SetVector("uColor", new Vector4(0.45f, 0.82f, 1.0f, 1.0f));
+            _characterPreviewMesh.DrawLines();
+        }
+
         _imgui?.Render();
     }
 
@@ -188,6 +197,7 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
 
         _terrainMesh?.Dispose();
         _brushMesh?.Dispose();
+        _characterPreviewMesh?.Dispose();
         _imgui?.Dispose();
         _shader?.Dispose();
         _input?.Dispose();
@@ -434,6 +444,97 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
 
         _brushMesh?.Dispose();
         _brushMesh = MeshBuffer.Create(_gl, CollectionsMarshal.AsSpan(vertices), CollectionsMarshal.AsSpan(indices));
+    }
+
+    private void RebuildCharacterPreviewMesh()
+    {
+        if (_gl is null) return;
+
+        if (!_keys.Contains(Key.T))
+        {
+            _characterPreviewMesh?.Dispose();
+            _characterPreviewMesh = null;
+            return;
+        }
+
+        const float radius = 0.25f;
+        const float height = 1.8f;
+        const int segments = 32;
+        var cylinderHeight = height - radius * 2.0f;
+        var bottomCentreY = _cursor.Y + radius;
+        var topCentreY = bottomCentreY + cylinderHeight;
+        var vertices = new List<float>((segments * 6 + 36) * 10);
+        var indices = new List<uint>((segments * 10 + 32) * 2);
+
+        for (var i = 0; i < segments; i++)
+        {
+            var angle = i / (float)segments * MathF.Tau;
+            var x = _cursor.X + MathF.Cos(angle) * radius;
+            var z = _cursor.Z + MathF.Sin(angle) * radius;
+            AddPreviewVertex(vertices, x, bottomCentreY, z);
+            AddPreviewVertex(vertices, x, topCentreY, z);
+        }
+
+        for (var i = 0; i < segments; i++)
+        {
+            var bottom = (uint)(i * 2);
+            var top = bottom + 1;
+            var nextBottom = (uint)(((i + 1) % segments) * 2);
+            var nextTop = nextBottom + 1;
+            indices.Add(bottom);
+            indices.Add(nextBottom);
+            indices.Add(top);
+            indices.Add(nextTop);
+            if (i % 8 == 0)
+            {
+                indices.Add(bottom);
+                indices.Add(top);
+            }
+        }
+
+        AddCapsuleArc(vertices, indices, topCentreY, radius, 0.0f);
+        AddCapsuleArc(vertices, indices, topCentreY, radius, MathF.PI * 0.5f);
+        AddCapsuleArc(vertices, indices, bottomCentreY, -radius, 0.0f);
+        AddCapsuleArc(vertices, indices, bottomCentreY, -radius, MathF.PI * 0.5f);
+
+        _characterPreviewMesh?.Dispose();
+        _characterPreviewMesh = MeshBuffer.Create(_gl, CollectionsMarshal.AsSpan(vertices), CollectionsMarshal.AsSpan(indices));
+    }
+
+    private void AddCapsuleArc(List<float> vertices, List<uint> indices, float centreY, float verticalRadius, float rotation)
+    {
+        const float radius = 0.25f;
+        const int arcSteps = 8;
+        var capSign = MathF.Sign(verticalRadius);
+        var start = (uint)(vertices.Count / 10);
+        for (var i = 0; i <= arcSteps; i++)
+        {
+            var t = i / (float)arcSteps * MathF.PI;
+            var horizontal = MathF.Cos(t) * radius;
+            var y = centreY + MathF.Sin(t) * radius * capSign;
+            var x = _cursor.X + MathF.Cos(rotation) * horizontal;
+            var z = _cursor.Z + MathF.Sin(rotation) * horizontal;
+            AddPreviewVertex(vertices, x, y, z);
+            if (i > 0)
+            {
+                indices.Add(start + (uint)i - 1);
+                indices.Add(start + (uint)i);
+            }
+        }
+    }
+
+    private static void AddPreviewVertex(List<float> vertices, float x, float y, float z)
+    {
+        vertices.Add(x);
+        vertices.Add(y);
+        vertices.Add(z);
+        vertices.Add(0.0f);
+        vertices.Add(1.0f);
+        vertices.Add(0.0f);
+        vertices.Add(0.45f);
+        vertices.Add(0.82f);
+        vertices.Add(1.0f);
+        vertices.Add(1.0f);
     }
 
     private void UpdateTitle()
