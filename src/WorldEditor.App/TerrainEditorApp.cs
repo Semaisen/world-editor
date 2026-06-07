@@ -31,6 +31,7 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
     private float _brushRadius = 2.0f;
     private float _brushStrength = 1.5f;
     private BrushFalloff _brushFalloff = BrushFalloff.Smooth;
+    private TerrainViewMode _viewMode = TerrainViewMode.Albedo;
     private Vector3 _cursor = new(64, 0, 64);
     private string _lastAction = "Ready";
     private float _mouseWheel;
@@ -148,10 +149,21 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
         _shader.SetMatrix("uView", view);
         _shader.SetMatrix("uProjection", projection);
 
-        _shader.SetVector("uColor", new Vector4(0.34f, 0.50f, 0.29f, 1.0f));
+        _shader.SetVector("uColor", new Vector4(0.18f, 0.20f, 0.18f, 1.0f));
         _shader.SetVector("uLightDirection", new Vector4(-0.45f, 0.85f, -0.28f, 0.0f));
         _shader.SetInt("uUseLighting", 1);
+        _shader.SetInt("uViewMode", (int)_viewMode);
+        if (_viewMode == TerrainViewMode.Wireframe)
+        {
+            _gl.PolygonMode(TriangleFace.FrontAndBack, PolygonMode.Line);
+        }
+
         _terrainMesh.DrawTriangles();
+        if (_viewMode == TerrainViewMode.Wireframe)
+        {
+            _gl.PolygonMode(TriangleFace.FrontAndBack, PolygonMode.Fill);
+        }
+
         _shader.SetVector("uColor", new Vector4(1.0f, 0.85f, 0.25f, 1.0f));
         _shader.SetInt("uUseLighting", 0);
         _brushMesh.DrawLines();
@@ -301,7 +313,12 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
         ImGui.Text($"Z {_cursor.Z:0.0} m");
         ImGui.Separator();
         ImGui.Text("Display");
-        ImGui.TextWrapped("Directional lighting and height tint are enabled for surface detail.");
+        if (ImGui.Button($"View: {GetViewModeName(_viewMode)}", new Vector2(-1, 32)))
+        {
+            _viewMode = GetNextViewMode(_viewMode);
+            _lastAction = $"View mode: {GetViewModeName(_viewMode)}";
+        }
+
         ImGui.Separator();
         ImGui.TextWrapped(_lastAction);
         ImGui.End();
@@ -351,7 +368,7 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
 
         var width = ((_tile.HeightmapWidth - 1) / PreviewStride) + 1;
         var height = ((_tile.HeightmapHeight - 1) / PreviewStride) + 1;
-        var vertices = new List<float>(width * height * 6);
+        var vertices = new List<float>(width * height * 10);
         var indices = new List<uint>((width - 1) * (height - 1) * 6);
 
         for (var z = 0; z < _tile.HeightmapHeight; z += PreviewStride)
@@ -365,6 +382,7 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
                 vertices.Add(normal.X);
                 vertices.Add(normal.Y);
                 vertices.Add(normal.Z);
+                AddAlbedo(vertices, x, z);
             }
         }
 
@@ -395,7 +413,7 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
         if (_gl is null) return;
 
         const int segments = 96;
-        var vertices = new List<float>(segments * 6);
+        var vertices = new List<float>(segments * 10);
         var indices = new List<uint>(segments * 2);
         for (var i = 0; i < segments; i++)
         {
@@ -406,6 +424,10 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
             vertices.Add(0.0f);
             vertices.Add(1.0f);
             vertices.Add(0.0f);
+            vertices.Add(1.0f);
+            vertices.Add(0.85f);
+            vertices.Add(0.25f);
+            vertices.Add(1.0f);
             indices.Add((uint)i);
             indices.Add((uint)((i + 1) % segments));
         }
@@ -423,15 +445,16 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
         #version 330 core
         layout (location = 0) in vec3 aPosition;
         layout (location = 1) in vec3 aNormal;
+        layout (location = 2) in vec4 aAlbedo;
         uniform mat4 uModel;
         uniform mat4 uView;
         uniform mat4 uProjection;
         out vec3 vNormal;
-        out float vHeight;
+        out vec4 vAlbedo;
         void main()
         {
             vNormal = normalize(aNormal);
-            vHeight = aPosition.y;
+            vAlbedo = aAlbedo;
             gl_Position = uProjection * uView * uModel * vec4(aPosition, 1.0);
         }
         """;
@@ -439,11 +462,12 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
     private const string FragmentShaderSource = """
         #version 330 core
         in vec3 vNormal;
-        in float vHeight;
+        in vec4 vAlbedo;
         out vec4 FragColor;
         uniform vec4 uColor;
         uniform vec4 uLightDirection;
         uniform int uUseLighting;
+        uniform int uViewMode;
         void main()
         {
             if (uUseLighting == 0)
@@ -456,14 +480,49 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
             vec3 light = normalize(uLightDirection.xyz);
             float diffuse = max(dot(normal, light), 0.0);
             float slope = 1.0 - clamp(normal.y, 0.0, 1.0);
-            float heightBand = clamp(vHeight / 12.0, -1.0, 1.0);
-            vec3 heightTint = mix(vec3(0.78, 0.88, 0.68), vec3(0.42, 0.55, 0.35), heightBand * 0.5 + 0.5);
-            vec3 baseColor = mix(uColor.rgb, heightTint, 0.22);
-            vec3 lit = baseColor * (0.34 + diffuse * 0.72);
-            lit += slope * vec3(0.08, 0.07, 0.05);
+            vec3 baseColor = vAlbedo.rgb;
+            if (uViewMode == 0)
+            {
+                baseColor = uColor.rgb;
+            }
+            else if (uViewMode == 2)
+            {
+                vec3 shallow = vec3(0.18, 0.58, 0.38);
+                vec3 rolling = vec3(0.86, 0.72, 0.28);
+                vec3 steep = vec3(0.74, 0.24, 0.18);
+                baseColor = mix(shallow, rolling, smoothstep(0.05, 0.36, slope));
+                baseColor = mix(baseColor, steep, smoothstep(0.36, 0.76, slope));
+            }
+
+            vec3 lit = baseColor * (0.38 + diffuse * 0.66);
+            lit += slope * vec3(0.04, 0.035, 0.03);
             FragColor = vec4(lit, uColor.a);
         }
         """;
+
+    private static TerrainViewMode GetNextViewMode(TerrainViewMode viewMode) => viewMode switch
+    {
+        TerrainViewMode.Wireframe => TerrainViewMode.Albedo,
+        TerrainViewMode.Albedo => TerrainViewMode.Height,
+        _ => TerrainViewMode.Wireframe
+    };
+
+    private static string GetViewModeName(TerrainViewMode viewMode) => viewMode switch
+    {
+        TerrainViewMode.Wireframe => "Wireframe",
+        TerrainViewMode.Albedo => "Albedo",
+        TerrainViewMode.Height => "Height",
+        _ => "Unknown"
+    };
+
+    private void AddAlbedo(List<float> vertices, int x, int z)
+    {
+        var index = _tile.GetIndex(x, z) * 4;
+        vertices.Add(_tile.Albedo[index] / 255.0f);
+        vertices.Add(_tile.Albedo[index + 1] / 255.0f);
+        vertices.Add(_tile.Albedo[index + 2] / 255.0f);
+        vertices.Add(_tile.Albedo[index + 3] / 255.0f);
+    }
 
     private Vector3 EstimatePreviewNormal(int x, int z)
     {
@@ -472,5 +531,12 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
         var down = _tile.GetHeight(x, Math.Max(0, z - PreviewStride));
         var up = _tile.GetHeight(x, Math.Min(_tile.HeightmapHeight - 1, z + PreviewStride));
         return Vector3.Normalize(new Vector3(left - right, 2.0f * _tile.ResolutionMetres * PreviewStride, down - up));
+    }
+
+    private enum TerrainViewMode
+    {
+        Wireframe,
+        Albedo,
+        Height
     }
 }

@@ -38,10 +38,12 @@ internal sealed unsafe class MeshBuffer : IDisposable
             gl.BufferData(BufferTargetARB.ElementArrayBuffer, (nuint)(indices.Length * sizeof(uint)), indexPtr, BufferUsageARB.DynamicDraw);
         }
 
-        gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, 6 * sizeof(float), (void*)0);
-        gl.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, 6 * sizeof(float), (void*)(3 * sizeof(float)));
+        gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, 10 * sizeof(float), (void*)0);
+        gl.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, 10 * sizeof(float), (void*)(3 * sizeof(float)));
+        gl.VertexAttribPointer(2, 4, VertexAttribPointerType.Float, false, 10 * sizeof(float), (void*)(6 * sizeof(float)));
         gl.EnableVertexAttribArray(0);
         gl.EnableVertexAttribArray(1);
+        gl.EnableVertexAttribArray(2);
         gl.BindVertexArray(0);
 
         return new MeshBuffer(gl, vao, vbo, ebo, (uint)indices.Length);
