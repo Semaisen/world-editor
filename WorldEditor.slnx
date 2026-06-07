@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/WorldEditor.App/WorldEditor.App.csproj" />
+    <Project Path="src/WorldEditor.Core/WorldEditor.Core.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/WorldEditor.Tests/WorldEditor.Tests.csproj" />
+  </Folder>
+</Solution>

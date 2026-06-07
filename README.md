@@ -1,0 +1,39 @@
+# World Editor
+
+Standalone terrain editor vertical slice for heightmap terrain intended for Godot export.
+
+## Requirements
+
+- .NET 10 SDK
+
+## Run
+
+```powershell
+dotnet run --project src\WorldEditor.App\WorldEditor.App.csproj
+```
+
+## UI And Controls
+
+The app has a simple left-hand toolbar for brush settings, project actions, and cursor readout.
+The terrain preview uses directional lighting, slope shading, and subtle height tinting so sculpted height changes are visible even before texture painting exists.
+
+- Right mouse drag: rotate camera
+- Middle mouse drag: pan camera
+- Mouse wheel: zoom
+- WASD: move camera
+- Q/E: move camera down/up
+- Left mouse drag: raise terrain
+- Ctrl + left mouse drag: lower terrain
+- 1/2: decrease/increase brush radius
+- 3/4: decrease/increase brush strength
+- Ctrl+S: save `SampleTerrainProject`
+- Ctrl+O: load `SampleTerrainProject`
+- Ctrl+P: export `GodotExport`
+
+The editor uses a lighter preview mesh for interactive rendering. Project save/load and Godot export use the full `1281 x 1281` heightmap.
+
+## Test
+
+```powershell
+dotnet test WorldEditor.slnx
+```
