@@ -30,7 +30,7 @@ The terrain preview uses directional lighting, slope shading, and subtle height 
 - Ctrl+O: load `SampleTerrainProject`
 - Ctrl+P: export `GodotExport`
 
-The editor uses a lighter preview mesh for interactive rendering. Project save/load and Godot export use the full `1281 x 1281` heightmap.
+The editor uses a lighter preview mesh for interactive rendering. Project save/load and Godot export use the full `2501 x 2501` heightmap.
 
 ## Test
 

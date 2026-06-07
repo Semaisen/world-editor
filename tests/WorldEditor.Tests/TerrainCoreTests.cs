@@ -9,11 +9,11 @@ public sealed class TerrainCoreTests
     {
         var tile = TerrainTile.CreateDefault();
 
-        Assert.Equal(128.0f, tile.WidthMetres);
-        Assert.Equal(128.0f, tile.DepthMetres);
-        Assert.Equal(0.1f, tile.ResolutionMetres);
-        Assert.Equal(1281, tile.HeightmapWidth);
-        Assert.Equal(1281, tile.HeightmapHeight);
+        Assert.Equal(500.0f, tile.WidthMetres);
+        Assert.Equal(500.0f, tile.DepthMetres);
+        Assert.Equal(0.2f, tile.ResolutionMetres);
+        Assert.Equal(2501, tile.HeightmapWidth);
+        Assert.Equal(2501, tile.HeightmapHeight);
         Assert.Equal(tile.HeightmapWidth * tile.HeightmapHeight, tile.Heights.Length);
     }
 
