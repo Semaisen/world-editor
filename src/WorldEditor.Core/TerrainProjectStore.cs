@@ -20,21 +20,77 @@ public static class TerrainProjectStore
         WriteAlbedo(tile, Path.Combine(projectDirectory, metadata.Albedo));
     }
 
-    public static TerrainTile Load(string projectDirectory)
+    public static void Save(TerrainWorld world, string projectDirectory)
+    {
+        ArgumentNullException.ThrowIfNull(world);
+        Directory.CreateDirectory(projectDirectory);
+        Directory.CreateDirectory(Path.Combine(projectDirectory, "tiles"));
+
+        var template = world.Tiles.Values.First();
+        var metadata = template.ToMetadata() with
+        {
+            Tiles = world.Tiles
+                .OrderBy(tile => tile.Key.X)
+                .ThenBy(tile => tile.Key.Z)
+                .Select(tile => CreateTileMetadata(tile.Key))
+                .ToList()
+        };
+        File.WriteAllText(Path.Combine(projectDirectory, "terrain.json"), JsonSerializer.Serialize(metadata, JsonOptions));
+
+        foreach (var (coord, tile) in world.Tiles)
+        {
+            var tileMetadata = CreateTileMetadata(coord);
+            WriteHeightmap(tile, Path.Combine(projectDirectory, tileMetadata.Heightmap));
+            WriteAlbedo(tile, Path.Combine(projectDirectory, tileMetadata.Albedo));
+        }
+    }
+
+    public static TerrainTile Load(string projectDirectory) => LoadWorld(projectDirectory).GetTile(new TerrainCoord(0, 0));
+
+    public static TerrainWorld LoadWorld(string projectDirectory)
     {
         var metadataPath = Path.Combine(projectDirectory, "terrain.json");
         var metadata = JsonSerializer.Deserialize<TerrainMetadata>(File.ReadAllText(metadataPath))
             ?? throw new InvalidDataException("terrain.json could not be parsed.");
 
+        if (metadata.Tiles is null || metadata.Tiles.Count == 0)
+        {
+            return TerrainWorld.FromSingleTile(LoadTile(projectDirectory, metadata, metadata.Heightmap, metadata.Albedo));
+        }
+
+        var tiles = new Dictionary<TerrainCoord, TerrainTile>();
+        foreach (var tileMetadata in metadata.Tiles)
+        {
+            var coord = new TerrainCoord(tileMetadata.X, tileMetadata.Z);
+            tiles.Add(coord, LoadTile(projectDirectory, metadata, tileMetadata.Heightmap, tileMetadata.Albedo));
+        }
+
+        return TerrainWorld.FromTiles(tiles);
+    }
+
+    private static TerrainTile LoadTile(string projectDirectory, TerrainMetadata metadata, string heightmap, string albedo)
+    {
         var tile = new TerrainTile(metadata.TerrainWidthMetres, metadata.TerrainDepthMetres, metadata.ResolutionMetres);
         if (tile.HeightmapWidth != metadata.HeightmapWidth || tile.HeightmapHeight != metadata.HeightmapHeight)
         {
             throw new InvalidDataException("Terrain dimensions do not match metadata sample counts.");
         }
 
-        ReadHeightmap(tile, Path.Combine(projectDirectory, metadata.Heightmap));
-        ReadAlbedo(tile, Path.Combine(projectDirectory, metadata.Albedo));
+        ReadHeightmap(tile, Path.Combine(projectDirectory, heightmap));
+        ReadAlbedo(tile, Path.Combine(projectDirectory, albedo));
         return tile;
+    }
+
+    private static TerrainTileMetadata CreateTileMetadata(TerrainCoord coord)
+    {
+        var prefix = $"tiles/tile_{coord.X}_{coord.Z}";
+        return new TerrainTileMetadata
+        {
+            X = coord.X,
+            Z = coord.Z,
+            Heightmap = $"{prefix}_heightmap.bin",
+            Albedo = $"{prefix}_albedo.png"
+        };
     }
 
     public static void WriteHeightmap(TerrainTile tile, string path)

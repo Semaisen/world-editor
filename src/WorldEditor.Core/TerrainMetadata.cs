@@ -33,4 +33,22 @@ public sealed record TerrainMetadata
 
     [JsonPropertyName("heightmap")]
     public string Heightmap { get; init; } = "heightmap.bin";
+
+    [JsonPropertyName("tiles")]
+    public List<TerrainTileMetadata>? Tiles { get; init; }
+}
+
+public sealed record TerrainTileMetadata
+{
+    [JsonPropertyName("x")]
+    public int X { get; init; }
+
+    [JsonPropertyName("z")]
+    public int Z { get; init; }
+
+    [JsonPropertyName("albedo")]
+    public string Albedo { get; init; } = "";
+
+    [JsonPropertyName("heightmap")]
+    public string Heightmap { get; init; } = "";
 }

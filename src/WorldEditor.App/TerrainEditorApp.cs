@@ -15,25 +15,33 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
     private readonly IWindow _window;
     private readonly Camera _camera = new();
     private readonly HashSet<Key> _keys = [];
-    private TerrainTile _tile = TerrainTile.CreateDefault();
+    private TerrainWorld _world = new();
     private GL? _gl;
     private IInputContext? _input;
     private ShaderProgram? _shader;
     private ImGuiController? _imgui;
     private MeshBuffer? _terrainMesh;
     private MeshBuffer? _brushMesh;
+    private MeshBuffer? _tileOverlayMesh;
     private MeshBuffer? _characterPreviewMesh;
     private Vector2 _lastMouse;
     private Vector2 _mouse;
     private bool _leftMouseDown;
+    private bool _leftMousePressed;
     private bool _rightMouseDown;
     private bool _middleMouseDown;
     private bool _meshDirty = true;
+    private bool _tileOverlayDirty = true;
+    private bool _tileMode;
     private float _brushRadius = 2.0f;
     private float _brushStrength = 1.5f;
     private BrushFalloff _brushFalloff = BrushFalloff.Smooth;
     private TerrainViewMode _viewMode = TerrainViewMode.Albedo;
     private Vector3 _cursor = new(64, 0, 64);
+    private TerrainCoord _cursorTileCoord;
+    private Vector2 _cursorLocal;
+    private bool _cursorHasTile = true;
+    private bool _cursorCanAddTile;
     private string _lastAction = "Ready";
     private float _mouseWheel;
     private bool _resourcesDisposed;
@@ -115,10 +123,14 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
         if (!uiHasMouse && _rightMouseDown) _camera.Rotate(mouseDelta.X, mouseDelta.Y);
         if (!uiHasMouse && _middleMouseDown) _camera.Pan(mouseDelta.X, mouseDelta.Y);
 
-        if (!uiHasMouse && _leftMouseDown)
+        if (!uiHasMouse && _tileMode && _leftMousePressed)
+        {
+            HandleTileModeClick();
+        }
+        else if (!uiHasMouse && !_tileMode && _leftMouseDown)
         {
             var lowered = _keys.Contains(Key.ControlLeft) || _keys.Contains(Key.ControlRight);
-            var changed = TerrainBrush.ApplyRaiseLower(_tile, _cursor.X, _cursor.Z, _brushRadius, _brushStrength, deltaSeconds, lowered, _brushFalloff);
+            var changed = TerrainBrush.ApplyRaiseLower(_world, _cursor.X, _cursor.Z, _brushRadius, _brushStrength, deltaSeconds, lowered, _brushFalloff);
             if (changed > 0)
             {
                 _meshDirty = true;
@@ -129,10 +141,12 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
         if (_meshDirty) RebuildTerrainMesh();
         UpdateCursor();
         RebuildBrushMesh();
+        if (_tileMode && _tileOverlayDirty) RebuildTileOverlayMesh();
         RebuildCharacterPreviewMesh();
         HandleShortcuts();
         UpdateTitle();
         _lastMouse = _mouse;
+        _leftMousePressed = false;
         _mouseWheel = 0.0f;
     }
 
@@ -169,7 +183,17 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
 
         _shader.SetVector("uColor", new Vector4(1.0f, 0.85f, 0.25f, 1.0f));
         _shader.SetInt("uUseLighting", 0);
-        _brushMesh.DrawLines();
+        if (!_tileMode)
+        {
+            _brushMesh.DrawLines();
+        }
+
+        if (_tileMode && _tileOverlayMesh is not null)
+        {
+            _shader.SetVector("uColor", new Vector4(0.24f, 0.86f, 1.0f, 1.0f));
+            _tileOverlayMesh.DrawLines();
+        }
+
         if (_keys.Contains(Key.T) && _characterPreviewMesh is not null)
         {
             _shader.SetVector("uColor", new Vector4(0.45f, 0.82f, 1.0f, 1.0f));
@@ -197,6 +221,7 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
 
         _terrainMesh?.Dispose();
         _brushMesh?.Dispose();
+        _tileOverlayMesh?.Dispose();
         _characterPreviewMesh?.Dispose();
         _imgui?.Dispose();
         _shader?.Dispose();
@@ -215,6 +240,7 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
                 _middleMouseDown = pressed;
                 break;
             case MouseButton.Left:
+                if (pressed && !_leftMouseDown) _leftMousePressed = true;
                 _leftMouseDown = pressed;
                 break;
         }
@@ -227,7 +253,7 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
 
         if (_keys.Remove(Key.S))
         {
-            TerrainProjectStore.Save(_tile, Path.Combine(Environment.CurrentDirectory, "SampleTerrainProject"));
+            TerrainProjectStore.Save(_world, Path.Combine(Environment.CurrentDirectory, "SampleTerrainProject"));
             _lastAction = "Saved SampleTerrainProject";
         }
         else if (_keys.Remove(Key.O))
@@ -235,14 +261,15 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
             var path = Path.Combine(Environment.CurrentDirectory, "SampleTerrainProject");
             if (Directory.Exists(path))
             {
-                _tile = TerrainProjectStore.Load(path);
+                _world = TerrainProjectStore.LoadWorld(path);
                 _meshDirty = true;
+                _tileOverlayDirty = true;
                 _lastAction = "Loaded SampleTerrainProject";
             }
         }
         else if (_keys.Remove(Key.P))
         {
-            GodotExporter.Export(_tile, Path.Combine(Environment.CurrentDirectory, "GodotExport"));
+            GodotExporter.Export(_world, Path.Combine(Environment.CurrentDirectory, "GodotExport"));
             _lastAction = "Exported GodotExport";
         }
     }
@@ -265,10 +292,14 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
         ImGui.Separator();
 
         ImGui.Text("Tool");
-        ImGui.BeginDisabled();
-        ImGui.Button("Raise / Lower", new Vector2(-1, 34));
-        ImGui.EndDisabled();
-        ImGui.TextWrapped("Left-drag raises. Hold Ctrl to lower.");
+        if (ImGui.Button(_tileMode ? "Tile Mode: On" : "Tile Mode: Off", new Vector2(-1, 34)))
+        {
+            _tileMode = !_tileMode;
+            _tileOverlayDirty = true;
+            _lastAction = _tileMode ? "Tile Mode enabled" : "Sculpt mode enabled";
+        }
+
+        ImGui.TextWrapped(_tileMode ? "Click ghost edges to add. Ctrl-click tiles to remove." : "Left-drag raises. Hold Ctrl to lower.");
         ImGui.Separator();
 
         ImGui.Text("Brush");
@@ -284,14 +315,15 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
         ImGui.Text("Project");
         if (ImGui.Button("New Flat Terrain", new Vector2(-1, 32)))
         {
-            _tile = TerrainTile.CreateDefault();
+            _world = new TerrainWorld();
             _meshDirty = true;
+            _tileOverlayDirty = true;
             _lastAction = "Created new flat terrain";
         }
 
         if (ImGui.Button("Save", new Vector2(-1, 32)))
         {
-            TerrainProjectStore.Save(_tile, Path.Combine(Environment.CurrentDirectory, "SampleTerrainProject"));
+            TerrainProjectStore.Save(_world, Path.Combine(Environment.CurrentDirectory, "SampleTerrainProject"));
             _lastAction = "Saved SampleTerrainProject";
         }
 
@@ -300,8 +332,9 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
             var path = Path.Combine(Environment.CurrentDirectory, "SampleTerrainProject");
             if (Directory.Exists(path))
             {
-                _tile = TerrainProjectStore.Load(path);
+                _world = TerrainProjectStore.LoadWorld(path);
                 _meshDirty = true;
+                _tileOverlayDirty = true;
                 _lastAction = "Loaded SampleTerrainProject";
             }
             else
@@ -312,7 +345,7 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
 
         if (ImGui.Button("Export Godot", new Vector2(-1, 32)))
         {
-            GodotExporter.Export(_tile, Path.Combine(Environment.CurrentDirectory, "GodotExport"));
+            GodotExporter.Export(_world, Path.Combine(Environment.CurrentDirectory, "GodotExport"));
             _lastAction = "Exported GodotExport";
         }
 
@@ -321,6 +354,7 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
         ImGui.Text($"X {_cursor.X:0.0} m");
         ImGui.Text($"Y {_cursor.Y:0.0} m");
         ImGui.Text($"Z {_cursor.Z:0.0} m");
+        ImGui.Text($"Tile {_cursorTileCoord}");
         ImGui.Separator();
         ImGui.Text("Display");
         if (ImGui.Button($"View: {GetViewModeName(_viewMode)}", new Vector2(-1, 32)))
@@ -365,57 +399,82 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
         var t = -origin.Y / direction.Y;
         if (t < 0) return;
         var hit = origin + direction * t;
-        var x = Math.Clamp(hit.X, 0.0f, _tile.WidthMetres);
-        var z = Math.Clamp(hit.Z, 0.0f, _tile.DepthMetres);
-        var sx = Math.Clamp((int)MathF.Round(x / _tile.ResolutionMetres), 0, _tile.HeightmapWidth - 1);
-        var sz = Math.Clamp((int)MathF.Round(z / _tile.ResolutionMetres), 0, _tile.HeightmapHeight - 1);
-        _cursor = new Vector3(x, _tile.GetHeight(sx, sz), z);
+        var template = _world.Tiles.Values.First();
+        var coord = GetTileCoord(hit.X, hit.Z, template);
+        var tileOriginX = coord.X * template.WidthMetres;
+        var tileOriginZ = coord.Z * template.DepthMetres;
+        var localX = Math.Clamp(hit.X - tileOriginX, 0.0f, template.WidthMetres);
+        var localZ = Math.Clamp(hit.Z - tileOriginZ, 0.0f, template.DepthMetres);
+
+        _cursorTileCoord = coord;
+        _cursorLocal = new Vector2(localX, localZ);
+        _cursorHasTile = _world.TryGetTile(coord, out var tile);
+        _cursorCanAddTile = _world.CanAddTile(coord);
+
+        var y = 0.0f;
+        if (tile is not null)
+        {
+            var sx = Math.Clamp((int)MathF.Round(localX / tile.ResolutionMetres), 0, tile.HeightmapWidth - 1);
+            var sz = Math.Clamp((int)MathF.Round(localZ / tile.ResolutionMetres), 0, tile.HeightmapHeight - 1);
+            y = tile.GetHeight(sx, sz);
+        }
+
+        _cursor = new Vector3(hit.X, y, hit.Z);
     }
 
     private void RebuildTerrainMesh()
     {
         if (_gl is null) return;
 
-        var width = ((_tile.HeightmapWidth - 1) / PreviewStride) + 1;
-        var height = ((_tile.HeightmapHeight - 1) / PreviewStride) + 1;
-        var vertices = new List<float>(width * height * 10);
-        var indices = new List<uint>((width - 1) * (height - 1) * 6);
+        var template = _world.Tiles.Values.First();
+        var previewWidth = ((template.HeightmapWidth - 1) / PreviewStride) + 1;
+        var previewHeight = ((template.HeightmapHeight - 1) / PreviewStride) + 1;
+        var vertices = new List<float>(_world.TileCount * previewWidth * previewHeight * 10);
+        var indices = new List<uint>(_world.TileCount * (previewWidth - 1) * (previewHeight - 1) * 6);
 
-        for (var z = 0; z < _tile.HeightmapHeight; z += PreviewStride)
+        foreach (var (coord, tile) in _world.Tiles.OrderBy(entry => entry.Key.X).ThenBy(entry => entry.Key.Z))
         {
-            for (var x = 0; x < _tile.HeightmapWidth; x += PreviewStride)
+            var tileVertexStart = (uint)(vertices.Count / 10);
+            var offsetX = coord.X * tile.WidthMetres;
+            var offsetZ = coord.Z * tile.DepthMetres;
+
+            for (var z = 0; z < tile.HeightmapHeight; z += PreviewStride)
             {
-                var normal = EstimatePreviewNormal(x, z);
-                vertices.Add(x * _tile.ResolutionMetres);
-                vertices.Add(_tile.GetHeight(x, z));
-                vertices.Add(z * _tile.ResolutionMetres);
-                vertices.Add(normal.X);
-                vertices.Add(normal.Y);
-                vertices.Add(normal.Z);
-                AddAlbedo(vertices, x, z);
+                for (var x = 0; x < tile.HeightmapWidth; x += PreviewStride)
+                {
+                    var normal = EstimatePreviewNormal(coord, tile, x, z);
+                    vertices.Add(offsetX + x * tile.ResolutionMetres);
+                    vertices.Add(tile.GetHeight(x, z));
+                    vertices.Add(offsetZ + z * tile.ResolutionMetres);
+                    vertices.Add(normal.X);
+                    vertices.Add(normal.Y);
+                    vertices.Add(normal.Z);
+                    AddAlbedo(vertices, tile, x, z);
+                }
             }
-        }
 
-        for (var z = 0; z < height - 1; z++)
-        {
-            for (var x = 0; x < width - 1; x++)
+            for (var z = 0; z < previewHeight - 1; z++)
             {
-                var a = (uint)(z * width + x);
-                var b = (uint)(z * width + x + 1);
-                var c = (uint)((z + 1) * width + x);
-                var d = (uint)((z + 1) * width + x + 1);
-                indices.Add(a);
-                indices.Add(c);
-                indices.Add(b);
-                indices.Add(b);
-                indices.Add(c);
-                indices.Add(d);
+                for (var x = 0; x < previewWidth - 1; x++)
+                {
+                    var a = tileVertexStart + (uint)(z * previewWidth + x);
+                    var b = tileVertexStart + (uint)(z * previewWidth + x + 1);
+                    var c = tileVertexStart + (uint)((z + 1) * previewWidth + x);
+                    var d = tileVertexStart + (uint)((z + 1) * previewWidth + x + 1);
+                    indices.Add(a);
+                    indices.Add(c);
+                    indices.Add(b);
+                    indices.Add(b);
+                    indices.Add(c);
+                    indices.Add(d);
+                }
             }
         }
 
         _terrainMesh?.Dispose();
         _terrainMesh = MeshBuffer.Create(_gl, CollectionsMarshal.AsSpan(vertices), CollectionsMarshal.AsSpan(indices));
         _meshDirty = false;
+        _tileOverlayDirty = true;
     }
 
     private void RebuildBrushMesh()
@@ -444,6 +503,106 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
 
         _brushMesh?.Dispose();
         _brushMesh = MeshBuffer.Create(_gl, CollectionsMarshal.AsSpan(vertices), CollectionsMarshal.AsSpan(indices));
+    }
+
+    private void RebuildTileOverlayMesh()
+    {
+        if (_gl is null) return;
+
+        var template = _world.Tiles.Values.First();
+        var addable = _world.GetAddableTileCoords();
+        var lineCoords = _world.Coordinates.Concat(addable).Distinct().ToList();
+        var vertices = new List<float>(lineCoords.Count * 4 * 10);
+        var indices = new List<uint>(lineCoords.Count * 8);
+
+        foreach (var coord in lineCoords)
+        {
+            var isAddable = addable.Contains(coord) && !_world.ContainsTile(coord);
+            var color = isAddable ? new Vector4(0.24f, 0.86f, 1.0f, 1.0f) : new Vector4(1.0f, 0.95f, 0.34f, 1.0f);
+            AddTileRectangle(vertices, indices, coord, template.WidthMetres, template.DepthMetres, isAddable ? 0.18f : 0.12f, color);
+        }
+
+        _tileOverlayMesh?.Dispose();
+        _tileOverlayMesh = MeshBuffer.Create(_gl, CollectionsMarshal.AsSpan(vertices), CollectionsMarshal.AsSpan(indices));
+        _tileOverlayDirty = false;
+    }
+
+    private static void AddTileRectangle(List<float> vertices, List<uint> indices, TerrainCoord coord, float width, float depth, float y, Vector4 color)
+    {
+        var start = (uint)(vertices.Count / 10);
+        var minX = coord.X * width;
+        var minZ = coord.Z * depth;
+        var maxX = minX + width;
+        var maxZ = minZ + depth;
+
+        AddLineVertex(vertices, minX, y, minZ, color);
+        AddLineVertex(vertices, maxX, y, minZ, color);
+        AddLineVertex(vertices, maxX, y, maxZ, color);
+        AddLineVertex(vertices, minX, y, maxZ, color);
+
+        indices.Add(start);
+        indices.Add(start + 1);
+        indices.Add(start + 1);
+        indices.Add(start + 2);
+        indices.Add(start + 2);
+        indices.Add(start + 3);
+        indices.Add(start + 3);
+        indices.Add(start);
+    }
+
+    private static void AddLineVertex(List<float> vertices, float x, float y, float z, Vector4 color)
+    {
+        vertices.Add(x);
+        vertices.Add(y);
+        vertices.Add(z);
+        vertices.Add(0.0f);
+        vertices.Add(1.0f);
+        vertices.Add(0.0f);
+        vertices.Add(color.X);
+        vertices.Add(color.Y);
+        vertices.Add(color.Z);
+        vertices.Add(color.W);
+    }
+
+    private void HandleTileModeClick()
+    {
+        var ctrl = _keys.Contains(Key.ControlLeft) || _keys.Contains(Key.ControlRight);
+        if (ctrl)
+        {
+            if (!_cursorHasTile)
+            {
+                _lastAction = $"No tile at {_cursorTileCoord}";
+                return;
+            }
+
+            if (_world.RemoveTile(_cursorTileCoord))
+            {
+                _meshDirty = true;
+                _tileOverlayDirty = true;
+                _lastAction = $"Removed tile {_cursorTileCoord}";
+            }
+            else
+            {
+                _lastAction = "Cannot remove tile: terrain must stay connected";
+            }
+
+            return;
+        }
+
+        if (_cursorCanAddTile && _world.AddTile(_cursorTileCoord))
+        {
+            _meshDirty = true;
+            _tileOverlayDirty = true;
+            _lastAction = $"Added tile {_cursorTileCoord}";
+        }
+        else if (_cursorHasTile)
+        {
+            _lastAction = $"Tile {_cursorTileCoord} already exists";
+        }
+        else
+        {
+            _lastAction = "Click an exposed edge tile to add terrain";
+        }
     }
 
     private void RebuildCharacterPreviewMesh()
@@ -539,7 +698,8 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
 
     private void UpdateTitle()
     {
-        _window.Title = $"World Editor | X {_cursor.X:0.0}m Y {_cursor.Y:0.0}m Z {_cursor.Z:0.0}m | Radius {_brushRadius:0.0}m Strength {_brushStrength:0.0}m/s | Ctrl+S save Ctrl+O load Ctrl+P export | {_lastAction}";
+        var tool = _tileMode ? "Tile Mode" : $"Radius {_brushRadius:0.0}m Strength {_brushStrength:0.0}m/s";
+        _window.Title = $"World Editor | X {_cursor.X:0.0}m Y {_cursor.Y:0.0}m Z {_cursor.Z:0.0}m | Tile {_cursorTileCoord} | {tool} | Ctrl+S save Ctrl+O load Ctrl+P export | {_lastAction}";
     }
 
     private const string VertexShaderSource = """
@@ -616,22 +776,45 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
         _ => "Unknown"
     };
 
-    private void AddAlbedo(List<float> vertices, int x, int z)
+    private void AddAlbedo(List<float> vertices, TerrainTile tile, int x, int z)
     {
-        var index = _tile.GetIndex(x, z) * 4;
-        vertices.Add(_tile.Albedo[index] / 255.0f);
-        vertices.Add(_tile.Albedo[index + 1] / 255.0f);
-        vertices.Add(_tile.Albedo[index + 2] / 255.0f);
-        vertices.Add(_tile.Albedo[index + 3] / 255.0f);
+        var index = tile.GetIndex(x, z) * 4;
+        vertices.Add(tile.Albedo[index] / 255.0f);
+        vertices.Add(tile.Albedo[index + 1] / 255.0f);
+        vertices.Add(tile.Albedo[index + 2] / 255.0f);
+        vertices.Add(tile.Albedo[index + 3] / 255.0f);
     }
 
-    private Vector3 EstimatePreviewNormal(int x, int z)
+    private Vector3 EstimatePreviewNormal(TerrainCoord coord, TerrainTile tile, int x, int z)
     {
-        var left = _tile.GetHeight(Math.Max(0, x - PreviewStride), z);
-        var right = _tile.GetHeight(Math.Min(_tile.HeightmapWidth - 1, x + PreviewStride), z);
-        var down = _tile.GetHeight(x, Math.Max(0, z - PreviewStride));
-        var up = _tile.GetHeight(x, Math.Min(_tile.HeightmapHeight - 1, z + PreviewStride));
-        return Vector3.Normalize(new Vector3(left - right, 2.0f * _tile.ResolutionMetres * PreviewStride, down - up));
+        var worldX = coord.X * tile.WidthMetres + x * tile.ResolutionMetres;
+        var worldZ = coord.Z * tile.DepthMetres + z * tile.ResolutionMetres;
+        var offset = PreviewStride * tile.ResolutionMetres;
+        var left = SampleWorldHeight(worldX - offset, worldZ, tile.GetHeight(Math.Max(0, x - PreviewStride), z));
+        var right = SampleWorldHeight(worldX + offset, worldZ, tile.GetHeight(Math.Min(tile.HeightmapWidth - 1, x + PreviewStride), z));
+        var down = SampleWorldHeight(worldX, worldZ - offset, tile.GetHeight(x, Math.Max(0, z - PreviewStride)));
+        var up = SampleWorldHeight(worldX, worldZ + offset, tile.GetHeight(x, Math.Min(tile.HeightmapHeight - 1, z + PreviewStride)));
+        return Vector3.Normalize(new Vector3(left - right, 2.0f * tile.ResolutionMetres * PreviewStride, down - up));
+    }
+
+    private float SampleWorldHeight(float worldX, float worldZ, float fallback)
+    {
+        var template = _world.Tiles.Values.First();
+        var coord = GetTileCoord(worldX, worldZ, template);
+        if (!_world.TryGetTile(coord, out var tile) || tile is null) return fallback;
+
+        var localX = Math.Clamp(worldX - coord.X * tile.WidthMetres, 0.0f, tile.WidthMetres);
+        var localZ = Math.Clamp(worldZ - coord.Z * tile.DepthMetres, 0.0f, tile.DepthMetres);
+        var sampleX = Math.Clamp((int)MathF.Round(localX / tile.ResolutionMetres), 0, tile.HeightmapWidth - 1);
+        var sampleZ = Math.Clamp((int)MathF.Round(localZ / tile.ResolutionMetres), 0, tile.HeightmapHeight - 1);
+        return tile.GetHeight(sampleX, sampleZ);
+    }
+
+    private static TerrainCoord GetTileCoord(float worldX, float worldZ, TerrainTile template)
+    {
+        return new TerrainCoord(
+            (int)MathF.Floor(worldX / template.WidthMetres),
+            (int)MathF.Floor(worldZ / template.DepthMetres));
     }
 
     private enum TerrainViewMode

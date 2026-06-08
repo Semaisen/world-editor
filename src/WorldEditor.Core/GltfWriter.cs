@@ -6,7 +6,7 @@ namespace WorldEditor.Core;
 
 internal static class GltfWriter
 {
-    public static void WriteTerrainGlb(TerrainTile tile, string path)
+    public static void WriteTerrainGlb(TerrainTile tile, string path, float offsetX = 0.0f, float offsetZ = 0.0f)
     {
         var vertexCount = checked(tile.HeightmapWidth * tile.HeightmapHeight);
         var quadCount = checked((tile.HeightmapWidth - 1) * (tile.HeightmapHeight - 1));
@@ -26,7 +26,7 @@ internal static class GltfWriter
         WriteVertices(tile, binary.AsSpan(positionsOffset, positionsLength), binary.AsSpan(normalsOffset, normalsLength), binary.AsSpan(texCoordsOffset, texCoordsLength));
         WriteIndices(tile, binary.AsSpan(indicesOffset, indicesLength));
 
-        var json = BuildJson(tile, vertexCount, indexCount, binaryLength, positionsOffset, positionsLength, normalsOffset, normalsLength, texCoordsOffset, texCoordsLength, indicesOffset, indicesLength);
+        var json = BuildJson(tile, vertexCount, indexCount, binaryLength, positionsOffset, positionsLength, normalsOffset, normalsLength, texCoordsOffset, texCoordsLength, indicesOffset, indicesLength, offsetX, offsetZ);
         var jsonBytes = Encoding.UTF8.GetBytes(json);
         var jsonPaddedLength = Align4(jsonBytes.Length);
         Array.Resize(ref jsonBytes, jsonPaddedLength);
@@ -104,7 +104,9 @@ internal static class GltfWriter
         int texCoordsOffset,
         int texCoordsLength,
         int indicesOffset,
-        int indicesLength)
+        int indicesLength,
+        float offsetX,
+        float offsetZ)
     {
         var maxHeight = tile.Heights.Length == 0 ? 0 : tile.Heights.Max();
         var minHeight = tile.Heights.Length == 0 ? 0 : tile.Heights.Min();
@@ -113,7 +115,7 @@ internal static class GltfWriter
             asset = new { version = "2.0", generator = "World Editor" },
             scene = 0,
             scenes = new[] { new { nodes = new[] { 0 } } },
-            nodes = new[] { new { mesh = 0, name = "Terrain" } },
+            nodes = new[] { new { mesh = 0, name = "Terrain", translation = new[] { offsetX, 0.0f, offsetZ } } },
             meshes = new[]
             {
                 new

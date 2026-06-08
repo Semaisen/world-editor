@@ -3,6 +3,48 @@ namespace WorldEditor.Core;
 public static class TerrainBrush
 {
     public static int ApplyRaiseLower(
+        TerrainWorld world,
+        float centreXMetres,
+        float centreZMetres,
+        float radiusMetres,
+        float strengthMetresPerSecond,
+        float deltaSeconds,
+        bool lower,
+        BrushFalloff falloff)
+    {
+        ArgumentNullException.ThrowIfNull(world);
+        if (radiusMetres <= 0 || strengthMetresPerSecond <= 0 || deltaSeconds <= 0) return 0;
+
+        var changed = 0;
+        foreach (var (coord, tile) in world.Tiles)
+        {
+            var originX = coord.X * tile.WidthMetres;
+            var originZ = coord.Z * tile.DepthMetres;
+            if (!CircleIntersectsTile(centreXMetres, centreZMetres, radiusMetres, originX, originZ, tile.WidthMetres, tile.DepthMetres))
+            {
+                continue;
+            }
+
+            changed += ApplyRaiseLower(
+                tile,
+                centreXMetres - originX,
+                centreZMetres - originZ,
+                radiusMetres,
+                strengthMetresPerSecond,
+                deltaSeconds,
+                lower,
+                falloff);
+        }
+
+        if (changed > 0)
+        {
+            world.SynchronizeSharedEdges();
+        }
+
+        return changed;
+    }
+
+    public static int ApplyRaiseLower(
         TerrainTile tile,
         float centreXMetres,
         float centreZMetres,
@@ -42,5 +84,14 @@ public static class TerrainBrush
         }
 
         return changed;
+    }
+
+    private static bool CircleIntersectsTile(float centreX, float centreZ, float radius, float tileX, float tileZ, float tileWidth, float tileDepth)
+    {
+        var closestX = Math.Clamp(centreX, tileX, tileX + tileWidth);
+        var closestZ = Math.Clamp(centreZ, tileZ, tileZ + tileDepth);
+        var dx = centreX - closestX;
+        var dz = centreZ - closestZ;
+        return dx * dx + dz * dz <= radius * radius;
     }
 }
