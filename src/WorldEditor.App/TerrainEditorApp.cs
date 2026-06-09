@@ -33,8 +33,11 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
     private bool _meshDirty = true;
     private bool _tileOverlayDirty = true;
     private bool _tileMode;
+    private TerrainTool _terrainTool = TerrainTool.RaiseLower;
     private float _brushRadius = 2.0f;
     private float _brushStrength = 1.5f;
+    private float _flattenHeight;
+    private bool _hasFlattenHeight;
     private BrushFalloff _brushFalloff = BrushFalloff.Smooth;
     private TerrainViewMode _viewMode = TerrainViewMode.Albedo;
     private Vector3 _cursor = new(64, 0, 64);
@@ -129,12 +132,10 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
         }
         else if (!uiHasMouse && !_tileMode && _leftMouseDown)
         {
-            var lowered = _keys.Contains(Key.ControlLeft) || _keys.Contains(Key.ControlRight);
-            var changed = TerrainBrush.ApplyRaiseLower(_world, _cursor.X, _cursor.Z, _brushRadius, _brushStrength, deltaSeconds, lowered, _brushFalloff);
+            var changed = ApplyActiveTerrainTool(deltaSeconds);
             if (changed > 0)
             {
                 _meshDirty = true;
-                _lastAction = lowered ? $"Lowered {changed} samples" : $"Raised {changed} samples";
             }
         }
 
@@ -242,6 +243,7 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
             case MouseButton.Left:
                 if (pressed && !_leftMouseDown) _leftMousePressed = true;
                 _leftMouseDown = pressed;
+                if (!pressed) _hasFlattenHeight = false;
                 break;
         }
     }
@@ -299,7 +301,14 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
             _lastAction = _tileMode ? "Tile Mode enabled" : "Sculpt mode enabled";
         }
 
-        ImGui.TextWrapped(_tileMode ? "Click ghost edges to add. Ctrl-click tiles to remove." : "Left-drag raises. Hold Ctrl to lower.");
+        if (!_tileMode)
+        {
+            DrawToolButton("[+/-]", "Raise / Lower", TerrainTool.RaiseLower);
+            DrawToolButton("[~]", "Smooth", TerrainTool.Smooth);
+            DrawToolButton("[=]", "Flatten", TerrainTool.Flatten);
+        }
+
+        ImGui.TextWrapped(_tileMode ? "Click ghost edges to add. Ctrl-click tiles to remove." : GetToolHelpText());
         ImGui.Separator();
 
         ImGui.Text("Brush");
@@ -367,6 +376,86 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
         ImGui.TextWrapped(_lastAction);
         ImGui.End();
     }
+
+    private void DrawToolButton(string icon, string label, TerrainTool tool)
+    {
+        var selected = _terrainTool == tool;
+        if (selected)
+        {
+            ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.23f, 0.45f, 0.72f, 1.0f));
+            ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.28f, 0.52f, 0.82f, 1.0f));
+            ImGui.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.18f, 0.36f, 0.62f, 1.0f));
+        }
+
+        if (ImGui.Button($"{icon} {label}", new Vector2(-1, 32)))
+        {
+            _terrainTool = tool;
+            _hasFlattenHeight = false;
+            _lastAction = $"{GetToolName(tool)} tool selected";
+        }
+
+        if (selected)
+        {
+            ImGui.PopStyleColor(3);
+        }
+    }
+
+    private int ApplyActiveTerrainTool(float deltaSeconds)
+    {
+        return _terrainTool switch
+        {
+            TerrainTool.Smooth => ApplySmoothTool(deltaSeconds),
+            TerrainTool.Flatten => ApplyFlattenTool(deltaSeconds),
+            _ => ApplyRaiseLowerTool(deltaSeconds)
+        };
+    }
+
+    private int ApplyRaiseLowerTool(float deltaSeconds)
+    {
+        var lowered = _keys.Contains(Key.ControlLeft) || _keys.Contains(Key.ControlRight);
+        var changed = TerrainBrush.ApplyRaiseLower(_world, _cursor.X, _cursor.Z, _brushRadius, _brushStrength, deltaSeconds, lowered, _brushFalloff);
+        if (changed > 0)
+        {
+            _lastAction = lowered ? $"Lowered {changed} samples" : $"Raised {changed} samples";
+        }
+
+        return changed;
+    }
+
+    private int ApplySmoothTool(float deltaSeconds)
+    {
+        var changed = TerrainBrush.ApplySmooth(_world, _cursor.X, _cursor.Z, _brushRadius, _brushStrength, deltaSeconds, _brushFalloff);
+        if (changed > 0)
+        {
+            _lastAction = $"Smoothed {changed} samples";
+        }
+
+        return changed;
+    }
+
+    private int ApplyFlattenTool(float deltaSeconds)
+    {
+        if (_leftMousePressed || !_hasFlattenHeight)
+        {
+            _flattenHeight = _cursor.Y;
+            _hasFlattenHeight = true;
+        }
+
+        var changed = TerrainBrush.ApplyFlatten(_world, _cursor.X, _cursor.Z, _brushRadius, _flattenHeight, _brushStrength, deltaSeconds, _brushFalloff);
+        if (changed > 0)
+        {
+            _lastAction = $"Flattened {changed} samples to {_flattenHeight:0.00} m";
+        }
+
+        return changed;
+    }
+
+    private string GetToolHelpText() => _terrainTool switch
+    {
+        TerrainTool.Smooth => "Left-drag smooths terrain. Larger radius blends broader shapes.",
+        TerrainTool.Flatten => "Left-drag flattens to the height sampled at stroke start.",
+        _ => "Left-drag raises. Hold Ctrl to lower."
+    };
 
     private void UpdateViewport()
     {
@@ -698,7 +787,7 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
 
     private void UpdateTitle()
     {
-        var tool = _tileMode ? "Tile Mode" : $"Radius {_brushRadius:0.0}m Strength {_brushStrength:0.0}m/s";
+        var tool = _tileMode ? "Tile Mode" : $"{GetToolName(_terrainTool)} | Radius {_brushRadius:0.0}m Strength {_brushStrength:0.0}m/s";
         _window.Title = $"World Editor | X {_cursor.X:0.0}m Y {_cursor.Y:0.0}m Z {_cursor.Z:0.0}m | Tile {_cursorTileCoord} | {tool} | Ctrl+S save Ctrl+O load Ctrl+P export | {_lastAction}";
     }
 
@@ -776,6 +865,14 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
         _ => "Unknown"
     };
 
+    private static string GetToolName(TerrainTool tool) => tool switch
+    {
+        TerrainTool.RaiseLower => "Raise / Lower",
+        TerrainTool.Smooth => "Smooth",
+        TerrainTool.Flatten => "Flatten",
+        _ => "Unknown"
+    };
+
     private void AddAlbedo(List<float> vertices, TerrainTile tile, int x, int z)
     {
         var index = tile.GetIndex(x, z) * 4;
@@ -822,5 +919,12 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
         Wireframe,
         Albedo,
         Height
+    }
+
+    private enum TerrainTool
+    {
+        RaiseLower,
+        Smooth,
+        Flatten
     }
 }

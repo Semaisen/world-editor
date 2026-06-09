@@ -24,6 +24,8 @@ The terrain preview uses directional lighting, slope shading, and subtle height 
 - Q/E: move camera down/up
 - Left mouse drag: raise terrain
 - Ctrl + left mouse drag: lower terrain
+- Smooth tool + left mouse drag: smooth height changes
+- Flatten tool + left mouse drag: flatten to the height sampled when the stroke starts
 - Tile Mode button: click exposed ghost tiles to add terrain chunks
 - Tile Mode + Ctrl + left click: remove a tile when the terrain stays connected
 - Added tiles blend from connected edges, and sculpt brushes affect every tile under the brush radius.

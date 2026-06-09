@@ -3,7 +3,7 @@ namespace WorldEditor.Core;
 public sealed class TerrainTile
 {
     public const float DefaultSizeMetres = 500.0f;
-    public const float DefaultResolutionMetres = 0.2f;
+    public const float DefaultResolutionMetres = 0.5f;
 
     public TerrainTile(float widthMetres, float depthMetres, float resolutionMetres)
     {

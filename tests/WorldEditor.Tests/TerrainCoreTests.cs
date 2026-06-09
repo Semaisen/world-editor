@@ -11,9 +11,9 @@ public sealed class TerrainCoreTests
 
         Assert.Equal(500.0f, tile.WidthMetres);
         Assert.Equal(500.0f, tile.DepthMetres);
-        Assert.Equal(0.2f, tile.ResolutionMetres);
-        Assert.Equal(2501, tile.HeightmapWidth);
-        Assert.Equal(2501, tile.HeightmapHeight);
+        Assert.Equal(0.5f, tile.ResolutionMetres);
+        Assert.Equal(1001, tile.HeightmapWidth);
+        Assert.Equal(1001, tile.HeightmapHeight);
         Assert.Equal(tile.HeightmapWidth * tile.HeightmapHeight, tile.Heights.Length);
     }
 
@@ -127,6 +127,35 @@ public sealed class TerrainCoreTests
         Assert.True(world.AddTile(new TerrainCoord(1, 0)));
 
         var changed = TerrainBrush.ApplyRaiseLower(world, 4, 2, 1.5f, 2, 0.5f, lower: false, BrushFalloff.Linear);
+        var west = world.GetTile(new TerrainCoord(0, 0));
+        var east = world.GetTile(new TerrainCoord(1, 0));
+
+        Assert.True(changed > 0);
+        Assert.True(west.GetHeight(3, 2) > 0);
+        Assert.True(east.GetHeight(1, 2) > 0);
+        Assert.Equal(west.GetHeight(west.HeightmapWidth - 1, 2), east.GetHeight(0, 2), precision: 5);
+    }
+
+    [Fact]
+    public void SmoothBrushRelaxesHeightSpike()
+    {
+        var world = TerrainWorld.FromSingleTile(new TerrainTile(4, 4, 1));
+        var tile = world.GetTile(new TerrainCoord(0, 0));
+        tile.SetHeight(2, 2, 10.0f);
+
+        var changed = TerrainBrush.ApplySmooth(world, 2, 2, 1.5f, 10.0f, 0.5f, BrushFalloff.Linear);
+
+        Assert.True(changed > 0);
+        Assert.True(tile.GetHeight(2, 2) < 10.0f);
+    }
+
+    [Fact]
+    public void FlattenBrushAffectsBothSidesOfTileBoundary()
+    {
+        var world = TerrainWorld.FromSingleTile(new TerrainTile(4, 4, 1));
+        Assert.True(world.AddTile(new TerrainCoord(1, 0)));
+
+        var changed = TerrainBrush.ApplyFlatten(world, 4, 2, 1.5f, 3.0f, 10.0f, 0.5f, BrushFalloff.Linear);
         var west = world.GetTile(new TerrainCoord(0, 0));
         var east = world.GetTile(new TerrainCoord(1, 0));
 
