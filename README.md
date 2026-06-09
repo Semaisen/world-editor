@@ -14,7 +14,13 @@ dotnet run --project src\WorldEditor.App\WorldEditor.App.csproj
 
 ## UI And Controls
 
-The app has a simple left-hand toolbar for brush settings, project actions, and cursor readout.
+The editor uses a dark charcoal theme with an orange accent, arranged in four regions:
+
+- Top header bar: app title plus New / Save / Load and an accented Export button
+- Left tool rail: icon buttons for Raise/Lower, Smooth, Flatten, Paint, and Tile Mode (the active tool is highlighted in orange; hover for tooltips)
+- Right properties panel: contextual sections for the active tool, brush settings, view mode, and camera speed
+- Bottom status bar: cursor position, tile coordinate, active tool, camera speed, and the last action
+
 The terrain preview uses directional lighting, slope shading, and subtle height tinting so sculpted height changes are visible even before texture painting exists.
 
 - Right mouse drag: rotate camera

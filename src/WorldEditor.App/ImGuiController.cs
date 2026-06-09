@@ -182,27 +182,69 @@ internal sealed unsafe class ImGuiController : IDisposable
     private static void ApplyStyle()
     {
         var style = ImGui.GetStyle();
-        style.WindowRounding = 0.0f;
-        style.FrameRounding = 3.0f;
-        style.GrabRounding = 3.0f;
-        style.ScrollbarRounding = 3.0f;
-        style.WindowBorderSize = 0.0f;
+        style.WindowRounding = 10.0f;
+        style.ChildRounding = 8.0f;
+        style.PopupRounding = 8.0f;
+        style.FrameRounding = 6.0f;
+        style.GrabRounding = 6.0f;
+        style.TabRounding = 6.0f;
+        style.ScrollbarRounding = 8.0f;
+        style.WindowBorderSize = 1.0f;
         style.FrameBorderSize = 0.0f;
+        style.PopupBorderSize = 1.0f;
         style.ItemSpacing = new Vector2(8, 8);
+        style.ItemInnerSpacing = new Vector2(6, 6);
+        style.FramePadding = new Vector2(10, 6);
         style.WindowPadding = new Vector2(14, 14);
+        style.ScrollbarSize = 10.0f;
+        style.GrabMinSize = 12.0f;
+
+        // Charcoal panels with a vivid orange accent.
+        var panel = new Vector4(0.157f, 0.157f, 0.171f, 1.0f);
+        var panelLight = new Vector4(0.196f, 0.196f, 0.212f, 1.0f);
+        var frame = new Vector4(0.224f, 0.224f, 0.243f, 1.0f);
+        var frameHover = new Vector4(0.271f, 0.271f, 0.294f, 1.0f);
+        var frameActive = new Vector4(0.318f, 0.318f, 0.345f, 1.0f);
+        var accent = new Vector4(0.949f, 0.329f, 0.114f, 1.0f);
+        var accentSoft = new Vector4(0.949f, 0.329f, 0.114f, 0.35f);
+        var accentHover = new Vector4(1.0f, 0.42f, 0.20f, 1.0f);
 
         var colors = style.Colors;
-        colors[(int)ImGuiCol.WindowBg] = new Vector4(0.105f, 0.115f, 0.12f, 0.96f);
-        colors[(int)ImGuiCol.FrameBg] = new Vector4(0.18f, 0.20f, 0.20f, 1.0f);
-        colors[(int)ImGuiCol.FrameBgHovered] = new Vector4(0.23f, 0.26f, 0.25f, 1.0f);
-        colors[(int)ImGuiCol.FrameBgActive] = new Vector4(0.27f, 0.32f, 0.29f, 1.0f);
-        colors[(int)ImGuiCol.Button] = new Vector4(0.20f, 0.24f, 0.22f, 1.0f);
-        colors[(int)ImGuiCol.ButtonHovered] = new Vector4(0.26f, 0.34f, 0.28f, 1.0f);
-        colors[(int)ImGuiCol.ButtonActive] = new Vector4(0.34f, 0.48f, 0.35f, 1.0f);
-        colors[(int)ImGuiCol.SliderGrab] = new Vector4(0.48f, 0.68f, 0.42f, 1.0f);
-        colors[(int)ImGuiCol.SliderGrabActive] = new Vector4(0.62f, 0.80f, 0.50f, 1.0f);
-        colors[(int)ImGuiCol.Text] = new Vector4(0.93f, 0.94f, 0.91f, 1.0f);
-        colors[(int)ImGuiCol.TextDisabled] = new Vector4(0.55f, 0.58f, 0.55f, 1.0f);
+        colors[(int)ImGuiCol.WindowBg] = panel;
+        colors[(int)ImGuiCol.ChildBg] = new Vector4(0.0f, 0.0f, 0.0f, 0.0f);
+        colors[(int)ImGuiCol.PopupBg] = new Vector4(0.137f, 0.137f, 0.149f, 0.98f);
+        colors[(int)ImGuiCol.Border] = new Vector4(1.0f, 1.0f, 1.0f, 0.06f);
+        colors[(int)ImGuiCol.BorderShadow] = new Vector4(0.0f, 0.0f, 0.0f, 0.0f);
+        colors[(int)ImGuiCol.FrameBg] = frame;
+        colors[(int)ImGuiCol.FrameBgHovered] = frameHover;
+        colors[(int)ImGuiCol.FrameBgActive] = frameActive;
+        colors[(int)ImGuiCol.TitleBg] = panel;
+        colors[(int)ImGuiCol.TitleBgActive] = panel;
+        colors[(int)ImGuiCol.MenuBarBg] = panel;
+        colors[(int)ImGuiCol.ScrollbarBg] = new Vector4(0.0f, 0.0f, 0.0f, 0.0f);
+        colors[(int)ImGuiCol.ScrollbarGrab] = frameHover;
+        colors[(int)ImGuiCol.ScrollbarGrabHovered] = frameActive;
+        colors[(int)ImGuiCol.ScrollbarGrabActive] = frameActive;
+        colors[(int)ImGuiCol.CheckMark] = accent;
+        colors[(int)ImGuiCol.SliderGrab] = accent;
+        colors[(int)ImGuiCol.SliderGrabActive] = accentHover;
+        colors[(int)ImGuiCol.Button] = frame;
+        colors[(int)ImGuiCol.ButtonHovered] = frameHover;
+        colors[(int)ImGuiCol.ButtonActive] = frameActive;
+        colors[(int)ImGuiCol.Header] = accentSoft;
+        colors[(int)ImGuiCol.HeaderHovered] = new Vector4(0.949f, 0.329f, 0.114f, 0.55f);
+        colors[(int)ImGuiCol.HeaderActive] = accent;
+        colors[(int)ImGuiCol.Separator] = new Vector4(1.0f, 1.0f, 1.0f, 0.08f);
+        colors[(int)ImGuiCol.SeparatorHovered] = accentSoft;
+        colors[(int)ImGuiCol.SeparatorActive] = accent;
+        colors[(int)ImGuiCol.PlotHistogram] = accent;
+        colors[(int)ImGuiCol.PlotHistogramHovered] = accentHover;
+        colors[(int)ImGuiCol.Text] = new Vector4(0.925f, 0.925f, 0.933f, 1.0f);
+        colors[(int)ImGuiCol.TextDisabled] = new Vector4(0.58f, 0.58f, 0.62f, 1.0f);
+        colors[(int)ImGuiCol.TextSelectedBg] = accentSoft;
+        colors[(int)ImGuiCol.Tab] = panelLight;
+        colors[(int)ImGuiCol.TabHovered] = accentHover;
+        colors[(int)ImGuiCol.TabSelected] = accent;
     }
 
     private const string VertexShaderSource = """

@@ -16,6 +16,19 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
     private const float MaxCameraSpeed = 140.0f;
     private const float CameraSpeedStep = 5.0f;
     private const float CameraSpeedBoost = 2.0f;
+    private const float HeaderBarHeight = 44.0f;
+    private const float StatusBarHeight = 30.0f;
+    private const float SidePanelWidth = 280.0f;
+    private const ImGuiWindowFlags HudWindowFlags =
+        ImGuiWindowFlags.NoMove |
+        ImGuiWindowFlags.NoResize |
+        ImGuiWindowFlags.NoCollapse |
+        ImGuiWindowFlags.NoTitleBar |
+        ImGuiWindowFlags.NoSavedSettings |
+        ImGuiWindowFlags.NoScrollbar;
+    private static readonly Vector4 AccentColor = new(0.949f, 0.329f, 0.114f, 1.0f);
+    private static readonly Vector4 AccentHoverColor = new(1.0f, 0.42f, 0.20f, 1.0f);
+    private static readonly Vector4 AccentActiveColor = new(0.80f, 0.26f, 0.08f, 1.0f);
     private readonly IWindow _window;
     private readonly Camera _camera = new();
     private readonly HashSet<Key> _keys = [];
@@ -104,7 +117,7 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
         }
 
         _gl.Enable(EnableCap.DepthTest);
-        _gl.ClearColor(0.09f, 0.11f, 0.13f, 1.0f);
+        _gl.ClearColor(0.078f, 0.078f, 0.086f, 1.0f);
         _shader = new ShaderProgram(_gl, VertexShaderSource, FragmentShaderSource);
         _imgui = new ImGuiController(_gl, _window);
         UpdateViewport();
@@ -116,7 +129,7 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
     {
         var deltaSeconds = (float)delta;
         _imgui?.Update(deltaSeconds, _mouse, _leftMouseDown, _rightMouseDown, _middleMouseDown, _mouseWheel);
-        DrawToolbar();
+        DrawUi();
 
         var uiHasMouse = _imgui?.WantsMouse ?? false;
         if (!uiHasMouse && _mouseWheel != 0)
@@ -181,7 +194,6 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
         if (_tileMode && _tileOverlayDirty) RebuildTileOverlayMesh();
         RebuildCharacterPreviewMesh();
         HandleShortcuts();
-        UpdateTitle();
         _lastMouse = _mouse;
         _leftMousePressed = false;
         _mouseWheel = 0.0f;
@@ -218,7 +230,7 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
             _gl.PolygonMode(TriangleFace.FrontAndBack, PolygonMode.Fill);
         }
 
-        _shader.SetVector("uColor", new Vector4(1.0f, 0.85f, 0.25f, 1.0f));
+        _shader.SetVector("uColor", new Vector4(AccentColor.X, AccentColor.Y, AccentColor.Z, 1.0f));
         _shader.SetInt("uUseLighting", 0);
         if (!_tileMode)
         {
@@ -312,80 +324,37 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
         }
     }
 
-    private void DrawToolbar()
+    private void DrawUi()
     {
-        var height = Math.Max(1, _window.Size.Y);
+        DrawHeaderBar();
+        DrawToolRail();
+        DrawSidePanel();
+        DrawStatusBar();
+    }
+
+    private void DrawHeaderBar()
+    {
+        var width = Math.Max(1, _window.Size.X);
         ImGui.SetNextWindowPos(Vector2.Zero, ImGuiCond.Always);
-        ImGui.SetNextWindowSize(new Vector2(280, height), ImGuiCond.Always);
-        ImGui.Begin(
-            "Tools",
-            ImGuiWindowFlags.NoMove |
-            ImGuiWindowFlags.NoResize |
-            ImGuiWindowFlags.NoCollapse |
-            ImGuiWindowFlags.NoTitleBar |
-            ImGuiWindowFlags.NoSavedSettings);
+        ImGui.SetNextWindowSize(new Vector2(width, HeaderBarHeight), ImGuiCond.Always);
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding, 0.0f);
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new Vector2(14.0f, 0.0f));
+        ImGui.Begin("##header", HudWindowFlags);
 
+        ImGui.SetCursorPosY((HeaderBarHeight - ImGui.GetTextLineHeight()) * 0.5f);
         ImGui.Text("World Editor");
-        ImGui.TextDisabled("Heightmap terrain");
-        ImGui.Separator();
+        ImGui.SameLine();
+        ImGui.TextDisabled("/ Heightmap Terrain");
 
-        ImGui.Text("Tool");
-        if (ImGui.Button(_tileMode ? "Tile Mode: On" : "Tile Mode: Off", new Vector2(-1, 34)))
-        {
-            _tileMode = !_tileMode;
-            _tileOverlayDirty = true;
-            _lastAction = _tileMode ? "Tile Mode enabled" : "Sculpt mode enabled";
-        }
+        var buttonSize = new Vector2(58.0f, 28.0f);
+        var exportSize = new Vector2(72.0f, 28.0f);
+        var spacing = ImGui.GetStyle().ItemSpacing.X;
+        var buttonsWidth = buttonSize.X * 3.0f + exportSize.X + spacing * 3.0f;
+        var buttonY = (HeaderBarHeight - buttonSize.Y) * 0.5f;
 
-        if (!_tileMode)
-        {
-            DrawToolButton("[+/-]", "Raise / Lower", TerrainTool.RaiseLower);
-            DrawToolButton("[~]", "Smooth", TerrainTool.Smooth);
-            DrawToolButton("[=]", "Flatten", TerrainTool.Flatten);
-            DrawToolButton("[#]", "Paint", TerrainTool.Paint);
-        }
-
-        ImGui.TextWrapped(_tileMode ? "Click ghost edges to add. Ctrl-click tiles to remove." : GetToolHelpText());
-        ImGui.Separator();
-
-        ImGui.Text("Camera");
-        var cameraSpeedRatio = (_cameraSpeed - MinCameraSpeed) / (MaxCameraSpeed - MinCameraSpeed);
-        ImGui.ProgressBar(cameraSpeedRatio, new Vector2(-1, 18), $"{_cameraSpeed:0} m/s");
-        ImGui.Separator();
-
-        ImGui.Text("Brush");
-        var brushShape = (int)_brushShape;
-        if (ImGui.Combo("Brush Shape", ref brushShape, "Circle\0Square\0Noise\0"))
-        {
-            _brushShape = (TerrainBrushShape)brushShape;
-        }
-
-        ImGui.SliderFloat("Radius (m)", ref _brushRadius, 0.1f, 50.0f, "%.1f");
-        if (_brushShape == TerrainBrushShape.Noise)
-        {
-            ImGui.SliderFloat("Noise Scale", ref _noiseScale, 0.01f, 1.0f, "%.2f");
-            ImGui.SliderFloat("Noise Amount", ref _noiseAmount, 0.0f, 1.0f, "%.2f");
-        }
-
-        if (_terrainTool == TerrainTool.Paint)
-        {
-            ImGui.ColorEdit3("Color", ref _paintColor);
-            ImGui.SliderFloat("Paint Strength", ref _paintStrength, 0.1f, 10.0f, "%.1f /s");
-        }
-        else
-        {
-            ImGui.SliderFloat("Strength", ref _brushStrength, 0.1f, 20.0f, "%.1f m/s");
-        }
-
-        var falloff = _brushFalloff == BrushFalloff.Smooth ? 1 : 0;
-        if (ImGui.Combo("Falloff", ref falloff, "Linear\0Smooth\0"))
-        {
-            _brushFalloff = falloff == 1 ? BrushFalloff.Smooth : BrushFalloff.Linear;
-        }
-
-        ImGui.Separator();
-        ImGui.Text("Project");
-        if (ImGui.Button("New Flat Terrain", new Vector2(-1, 32)))
+        ImGui.SameLine(width - buttonsWidth - 14.0f);
+        ImGui.SetCursorPosY(buttonY);
+        if (ImGui.Button("New", buttonSize))
         {
             _world = new TerrainWorld();
             _meshDirty = true;
@@ -393,13 +362,21 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
             _lastAction = "Created new flat terrain";
         }
 
-        if (ImGui.Button("Save", new Vector2(-1, 32)))
+        DrawHoverTooltip("Replace the world with a new flat terrain");
+
+        ImGui.SameLine();
+        ImGui.SetCursorPosY(buttonY);
+        if (ImGui.Button("Save", buttonSize))
         {
             TerrainProjectStore.Save(_world, Path.Combine(Environment.CurrentDirectory, "SampleTerrainProject"));
             _lastAction = "Saved SampleTerrainProject";
         }
 
-        if (ImGui.Button("Load", new Vector2(-1, 32)))
+        DrawHoverTooltip("Save SampleTerrainProject (Ctrl+S)");
+
+        ImGui.SameLine();
+        ImGui.SetCursorPosY(buttonY);
+        if (ImGui.Button("Load", buttonSize))
         {
             var path = Path.Combine(Environment.CurrentDirectory, "SampleTerrainProject");
             if (Directory.Exists(path))
@@ -415,52 +392,241 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
             }
         }
 
-        if (ImGui.Button("Export Godot", new Vector2(-1, 32)))
+        DrawHoverTooltip("Load SampleTerrainProject (Ctrl+O)");
+
+        ImGui.SameLine();
+        ImGui.SetCursorPosY(buttonY);
+        if (DrawAccentButton("Export", exportSize))
         {
             GodotExporter.Export(_world, Path.Combine(Environment.CurrentDirectory, "GodotExport"));
             _lastAction = "Exported GodotExport";
         }
 
-        ImGui.Separator();
-        ImGui.Text("Cursor");
-        ImGui.Text($"X {_cursor.X:0.0} m");
-        ImGui.Text($"Y {_cursor.Y:0.0} m");
-        ImGui.Text($"Z {_cursor.Z:0.0} m");
-        ImGui.Text($"Tile {_cursorTileCoord}");
-        ImGui.Separator();
-        ImGui.Text("Display");
-        if (ImGui.Button($"View: {GetViewModeName(_viewMode)}", new Vector2(-1, 32)))
-        {
-            _viewMode = GetNextViewMode(_viewMode);
-            _lastAction = $"View mode: {GetViewModeName(_viewMode)}";
-        }
+        DrawHoverTooltip("Export to GodotExport (Ctrl+P)");
 
-        ImGui.Separator();
-        ImGui.TextWrapped(_lastAction);
         ImGui.End();
+        ImGui.PopStyleVar(2);
     }
 
-    private void DrawToolButton(string icon, string label, TerrainTool tool)
+    private void DrawToolRail()
     {
-        var selected = _terrainTool == tool;
-        if (selected)
+        ImGui.SetNextWindowPos(new Vector2(12.0f, HeaderBarHeight + 12.0f), ImGuiCond.Always);
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new Vector2(8.0f, 8.0f));
+        ImGui.PushStyleVar(ImGuiStyleVar.ItemSpacing, new Vector2(6.0f, 6.0f));
+        ImGui.Begin("##toolrail", HudWindowFlags | ImGuiWindowFlags.AlwaysAutoResize);
+
+        DrawRailToolButton("^", "Raise / Lower", "Left-drag raises, Ctrl lowers", TerrainTool.RaiseLower);
+        DrawRailToolButton("~", "Smooth", "Left-drag smooths height changes", TerrainTool.Smooth);
+        DrawRailToolButton("=", "Flatten", "Left-drag flattens to the stroke-start height", TerrainTool.Flatten);
+        DrawRailToolButton("@", "Paint", "Left-drag blends color into the terrain", TerrainTool.Paint);
+
+        ImGui.Separator();
+
+        var tileSelected = _tileMode;
+        if (tileSelected) PushAccentButtonColors();
+        if (ImGui.Button("#", new Vector2(36.0f, 36.0f)))
         {
-            ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.23f, 0.45f, 0.72f, 1.0f));
-            ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.28f, 0.52f, 0.82f, 1.0f));
-            ImGui.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.18f, 0.36f, 0.62f, 1.0f));
+            _tileMode = !_tileMode;
+            _tileOverlayDirty = true;
+            _lastAction = _tileMode ? "Tile Mode enabled" : "Sculpt mode enabled";
         }
 
-        if (ImGui.Button($"{icon} {label}", new Vector2(-1, 32)))
+        if (tileSelected) ImGui.PopStyleColor(4);
+        DrawHoverTooltip("Tile Mode\nClick ghost tiles to add, Ctrl-click to remove");
+
+        ImGui.End();
+        ImGui.PopStyleVar(2);
+    }
+
+    private void DrawRailToolButton(string icon, string label, string help, TerrainTool tool)
+    {
+        var selected = !_tileMode && _terrainTool == tool;
+        if (selected) PushAccentButtonColors();
+        if (ImGui.Button(icon, new Vector2(36.0f, 36.0f)))
         {
             _terrainTool = tool;
             _hasFlattenHeight = false;
+            if (_tileMode)
+            {
+                _tileMode = false;
+                _tileOverlayDirty = true;
+            }
+
             _lastAction = $"{GetToolName(tool)} tool selected";
         }
 
-        if (selected)
+        if (selected) ImGui.PopStyleColor(4);
+        DrawHoverTooltip($"{label}\n{help}");
+    }
+
+    private void DrawSidePanel()
+    {
+        var size = _window.Size;
+        var height = Math.Max(1.0f, size.Y - HeaderBarHeight - StatusBarHeight);
+        ImGui.SetNextWindowPos(new Vector2(size.X - SidePanelWidth, HeaderBarHeight), ImGuiCond.Always);
+        ImGui.SetNextWindowSize(new Vector2(SidePanelWidth, height), ImGuiCond.Always);
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding, 0.0f);
+        ImGui.Begin("##sidepanel", HudWindowFlags & ~ImGuiWindowFlags.NoScrollbar);
+
+        if (_tileMode)
         {
-            ImGui.PopStyleColor(3);
+            DrawSectionHeader("Tile Mode", true);
+            ImGui.PushStyleColor(ImGuiCol.Text, ImGui.GetStyle().Colors[(int)ImGuiCol.TextDisabled]);
+            ImGui.TextWrapped("Click a ghost tile to add terrain. Ctrl-click a tile to remove it while the terrain stays connected.");
+            ImGui.PopStyleColor();
         }
+        else
+        {
+            DrawSectionHeader(GetToolName(_terrainTool), true);
+            ImGui.PushStyleColor(ImGuiCol.Text, ImGui.GetStyle().Colors[(int)ImGuiCol.TextDisabled]);
+            ImGui.TextWrapped(GetToolHelpText());
+            ImGui.PopStyleColor();
+
+            DrawSectionHeader("Brush");
+            DrawFieldLabel("Shape");
+            var brushShape = (int)_brushShape;
+            ImGui.SetNextItemWidth(-1);
+            if (ImGui.Combo("##shape", ref brushShape, "Circle\0Square\0Noise\0"))
+            {
+                _brushShape = (TerrainBrushShape)brushShape;
+            }
+
+            DrawFieldLabel("Radius");
+            ImGui.SetNextItemWidth(-1);
+            ImGui.SliderFloat("##radius", ref _brushRadius, 0.1f, 50.0f, "%.1f m");
+            DrawHoverTooltip("Shortcut: 1 / 2");
+
+            if (_brushShape == TerrainBrushShape.Noise)
+            {
+                DrawFieldLabel("Noise Scale");
+                ImGui.SetNextItemWidth(-1);
+                ImGui.SliderFloat("##noisescale", ref _noiseScale, 0.01f, 1.0f, "%.2f");
+                DrawFieldLabel("Noise Amount");
+                ImGui.SetNextItemWidth(-1);
+                ImGui.SliderFloat("##noiseamount", ref _noiseAmount, 0.0f, 1.0f, "%.2f");
+            }
+
+            if (_terrainTool == TerrainTool.Paint)
+            {
+                DrawFieldLabel("Color");
+                ImGui.SetNextItemWidth(-1);
+                ImGui.ColorEdit3("##paintcolor", ref _paintColor);
+                DrawFieldLabel("Paint Strength");
+                ImGui.SetNextItemWidth(-1);
+                ImGui.SliderFloat("##paintstrength", ref _paintStrength, 0.1f, 10.0f, "%.1f /s");
+                DrawHoverTooltip("Shortcut: 3 / 4");
+            }
+            else
+            {
+                DrawFieldLabel("Strength");
+                ImGui.SetNextItemWidth(-1);
+                ImGui.SliderFloat("##strength", ref _brushStrength, 0.1f, 20.0f, "%.1f m/s");
+                DrawHoverTooltip("Shortcut: 3 / 4");
+            }
+
+            DrawFieldLabel("Falloff");
+            var falloff = _brushFalloff == BrushFalloff.Smooth ? 1 : 0;
+            ImGui.SetNextItemWidth(-1);
+            if (ImGui.Combo("##falloff", ref falloff, "Linear\0Smooth\0"))
+            {
+                _brushFalloff = falloff == 1 ? BrushFalloff.Smooth : BrushFalloff.Linear;
+            }
+        }
+
+        DrawSectionHeader("Display");
+        DrawFieldLabel("View Mode");
+        var viewMode = (int)_viewMode;
+        ImGui.SetNextItemWidth(-1);
+        if (ImGui.Combo("##viewmode", ref viewMode, "Wireframe\0Albedo\0Height\0"))
+        {
+            _viewMode = (TerrainViewMode)viewMode;
+            _lastAction = $"View mode: {GetViewModeName(_viewMode)}";
+        }
+
+        DrawSectionHeader("Camera");
+        DrawFieldLabel("Speed");
+        var cameraSpeedRatio = (_cameraSpeed - MinCameraSpeed) / (MaxCameraSpeed - MinCameraSpeed);
+        ImGui.ProgressBar(cameraSpeedRatio, new Vector2(-1, 16), $"{_cameraSpeed:0} m/s");
+        DrawHoverTooltip("Mouse wheel adjusts speed, Shift boosts");
+
+        ImGui.End();
+        ImGui.PopStyleVar();
+    }
+
+    private void DrawStatusBar()
+    {
+        var size = _window.Size;
+        ImGui.SetNextWindowPos(new Vector2(0.0f, size.Y - StatusBarHeight), ImGuiCond.Always);
+        ImGui.SetNextWindowSize(new Vector2(size.X, StatusBarHeight), ImGuiCond.Always);
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding, 0.0f);
+        ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new Vector2(14.0f, (StatusBarHeight - ImGui.GetTextLineHeight()) * 0.5f));
+        ImGui.Begin("##statusbar", HudWindowFlags);
+
+        ImGui.Text($"X {_cursor.X:0.0}  Y {_cursor.Y:0.0}  Z {_cursor.Z:0.0}");
+        DrawStatusDivider();
+        ImGui.Text($"Tile {_cursorTileCoord}");
+        DrawStatusDivider();
+        ImGui.Text(_tileMode
+            ? "Tile Mode"
+            : $"{GetToolName(_terrainTool)}  {_brushRadius:0.0} m");
+        DrawStatusDivider();
+        ImGui.Text($"Cam {_cameraSpeed:0} m/s");
+
+        var actionWidth = ImGui.CalcTextSize(_lastAction).X;
+        ImGui.SameLine(Math.Max(0.0f, size.X - actionWidth - 14.0f));
+        ImGui.TextDisabled(_lastAction);
+
+        ImGui.End();
+        ImGui.PopStyleVar(2);
+    }
+
+    private static void DrawStatusDivider()
+    {
+        ImGui.SameLine();
+        ImGui.TextDisabled("|");
+        ImGui.SameLine();
+    }
+
+    private static void DrawSectionHeader(string title, bool first = false)
+    {
+        if (!first)
+        {
+            ImGui.Spacing();
+            ImGui.Separator();
+            ImGui.Spacing();
+        }
+
+        ImGui.TextDisabled(title.ToUpperInvariant());
+        ImGui.Spacing();
+    }
+
+    private static void DrawFieldLabel(string label)
+    {
+        ImGui.TextDisabled(label);
+    }
+
+    private static void DrawHoverTooltip(string text)
+    {
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.DelayShort))
+        {
+            ImGui.SetTooltip(text);
+        }
+    }
+
+    private static void PushAccentButtonColors()
+    {
+        ImGui.PushStyleColor(ImGuiCol.Button, AccentColor);
+        ImGui.PushStyleColor(ImGuiCol.ButtonHovered, AccentHoverColor);
+        ImGui.PushStyleColor(ImGuiCol.ButtonActive, AccentActiveColor);
+        ImGui.PushStyleColor(ImGuiCol.Text, new Vector4(1.0f, 1.0f, 1.0f, 1.0f));
+    }
+
+    private static bool DrawAccentButton(string label, Vector2 size)
+    {
+        PushAccentButtonColors();
+        var pressed = ImGui.Button(label, size);
+        ImGui.PopStyleColor(4);
+        return pressed;
     }
 
     private int ApplyActiveTerrainTool(float deltaSeconds)
@@ -897,13 +1063,6 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
         vertices.Add(1.0f);
     }
 
-    private void UpdateTitle()
-    {
-        var strength = _terrainTool == TerrainTool.Paint ? $"Paint {_paintStrength:0.0}/s" : $"Strength {_brushStrength:0.0}m/s";
-        var tool = _tileMode ? "Tile Mode" : $"{GetToolName(_terrainTool)} | {GetBrushShapeName(_brushShape)} Radius {_brushRadius:0.0}m {strength}";
-        _window.Title = $"World Editor | X {_cursor.X:0.0}m Y {_cursor.Y:0.0}m Z {_cursor.Z:0.0}m | Tile {_cursorTileCoord} | {tool} | Ctrl+S save Ctrl+O load Ctrl+P export | {_lastAction}";
-    }
-
     private const string VertexShaderSource = """
         #version 330 core
         layout (location = 0) in vec3 aPosition;
@@ -963,13 +1122,6 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
         }
         """;
 
-    private static TerrainViewMode GetNextViewMode(TerrainViewMode viewMode) => viewMode switch
-    {
-        TerrainViewMode.Wireframe => TerrainViewMode.Albedo,
-        TerrainViewMode.Albedo => TerrainViewMode.Height,
-        _ => TerrainViewMode.Wireframe
-    };
-
     private static string GetViewModeName(TerrainViewMode viewMode) => viewMode switch
     {
         TerrainViewMode.Wireframe => "Wireframe",
@@ -984,14 +1136,6 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
         TerrainTool.Smooth => "Smooth",
         TerrainTool.Flatten => "Flatten",
         TerrainTool.Paint => "Paint",
-        _ => "Unknown"
-    };
-
-    private static string GetBrushShapeName(TerrainBrushShape shape) => shape switch
-    {
-        TerrainBrushShape.Circle => "Circle",
-        TerrainBrushShape.Square => "Square",
-        TerrainBrushShape.Noise => "Noise",
         _ => "Unknown"
     };
 
