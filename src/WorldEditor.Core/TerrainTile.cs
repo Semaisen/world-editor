@@ -31,6 +31,14 @@ public sealed class TerrainTile
 
     public static TerrainTile CreateDefault() => new(DefaultSizeMetres, DefaultSizeMetres, DefaultResolutionMetres);
 
+    public TerrainTile Clone()
+    {
+        var clone = new TerrainTile(WidthMetres, DepthMetres, ResolutionMetres);
+        Heights.CopyTo(clone.Heights, 0);
+        Albedo.CopyTo(clone.Albedo, 0);
+        return clone;
+    }
+
     public TerrainMetadata ToMetadata() => new()
     {
         TerrainWidthMetres = WidthMetres,

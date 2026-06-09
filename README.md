@@ -41,6 +41,8 @@ The terrain preview uses directional lighting, slope shading, and subtle height 
 - Added tiles blend from connected edges, and sculpt brushes affect every tile under the brush radius.
 - 1/2: decrease/increase brush radius
 - 3/4: decrease/increase active brush strength
+- Ctrl+Z: undo the last terrain edit
+- Ctrl+Y: redo the last undone terrain edit
 - Ctrl+S: save `SampleTerrainProject`
 - Ctrl+O: load `SampleTerrainProject`
 - Ctrl+P: export `GodotExport`

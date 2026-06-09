@@ -19,6 +19,7 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
     private const float HeaderBarHeight = 44.0f;
     private const float StatusBarHeight = 30.0f;
     private const float SidePanelWidth = 280.0f;
+    private const int MaxHistoryStates = 32;
     private const ImGuiWindowFlags HudWindowFlags =
         ImGuiWindowFlags.NoMove |
         ImGuiWindowFlags.NoResize |
@@ -32,7 +33,10 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
     private readonly IWindow _window;
     private readonly Camera _camera = new();
     private readonly HashSet<Key> _keys = [];
+    private readonly List<TerrainWorld> _undoStack = [];
+    private readonly List<TerrainWorld> _redoStack = [];
     private TerrainWorld _world = new();
+    private TerrainWorld? _strokeBeforeWorld;
     private GL? _gl;
     private IInputContext? _input;
     private ShaderProgram? _shader;
@@ -49,6 +53,7 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
     private bool _middleMouseDown;
     private bool _meshDirty = true;
     private bool _tileOverlayDirty = true;
+    private bool _strokeChanged;
     private bool _tileMode;
     private TerrainTool _terrainTool = TerrainTool.RaiseLower;
     private TerrainBrushShape _brushShape = TerrainBrushShape.Circle;
@@ -181,10 +186,16 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
         }
         else if (!uiHasMouse && !_tileMode && _leftMouseDown)
         {
+            if (_leftMousePressed)
+            {
+                BeginTerrainStroke();
+            }
+
             var changed = ApplyActiveTerrainTool(deltaSeconds);
             if (changed > 0)
             {
                 _meshDirty = true;
+                _strokeChanged = true;
             }
         }
 
@@ -291,7 +302,11 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
             case MouseButton.Left:
                 if (pressed && !_leftMouseDown) _leftMousePressed = true;
                 _leftMouseDown = pressed;
-                if (!pressed) _hasFlattenHeight = false;
+                if (!pressed)
+                {
+                    EndTerrainStroke();
+                    _hasFlattenHeight = false;
+                }
                 break;
         }
     }
@@ -301,7 +316,15 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
         var ctrl = _keys.Contains(Key.ControlLeft) || _keys.Contains(Key.ControlRight);
         if (!ctrl) return;
 
-        if (_keys.Remove(Key.S))
+        if (_keys.Remove(Key.Z))
+        {
+            Undo();
+        }
+        else if (_keys.Remove(Key.Y))
+        {
+            Redo();
+        }
+        else if (_keys.Remove(Key.S))
         {
             TerrainProjectStore.Save(_world, Path.Combine(Environment.CurrentDirectory, "SampleTerrainProject"));
             _lastAction = "Saved SampleTerrainProject";
@@ -311,7 +334,9 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
             var path = Path.Combine(Environment.CurrentDirectory, "SampleTerrainProject");
             if (Directory.Exists(path))
             {
+                PushUndoState(_world);
                 _world = TerrainProjectStore.LoadWorld(path);
+                _redoStack.Clear();
                 _meshDirty = true;
                 _tileOverlayDirty = true;
                 _lastAction = "Loaded SampleTerrainProject";
@@ -349,14 +374,39 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
         var buttonSize = new Vector2(58.0f, 28.0f);
         var exportSize = new Vector2(72.0f, 28.0f);
         var spacing = ImGui.GetStyle().ItemSpacing.X;
-        var buttonsWidth = buttonSize.X * 3.0f + exportSize.X + spacing * 3.0f;
+        var undoSize = new Vector2(64.0f, 28.0f);
+        var buttonsWidth = undoSize.X * 2.0f + buttonSize.X * 3.0f + exportSize.X + spacing * 5.0f;
         var buttonY = (HeaderBarHeight - buttonSize.Y) * 0.5f;
 
         ImGui.SameLine(width - buttonsWidth - 14.0f);
         ImGui.SetCursorPosY(buttonY);
+        ImGui.BeginDisabled(_undoStack.Count == 0);
+        if (ImGui.Button("Undo", undoSize))
+        {
+            Undo();
+        }
+
+        ImGui.EndDisabled();
+        DrawHoverTooltip("Undo last terrain edit (Ctrl+Z)");
+
+        ImGui.SameLine();
+        ImGui.SetCursorPosY(buttonY);
+        ImGui.BeginDisabled(_redoStack.Count == 0);
+        if (ImGui.Button("Redo", undoSize))
+        {
+            Redo();
+        }
+
+        ImGui.EndDisabled();
+        DrawHoverTooltip("Redo last undone terrain edit (Ctrl+Y)");
+
+        ImGui.SameLine();
+        ImGui.SetCursorPosY(buttonY);
         if (ImGui.Button("New", buttonSize))
         {
+            PushUndoState(_world);
             _world = new TerrainWorld();
+            _redoStack.Clear();
             _meshDirty = true;
             _tileOverlayDirty = true;
             _lastAction = "Created new flat terrain";
@@ -381,7 +431,9 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
             var path = Path.Combine(Environment.CurrentDirectory, "SampleTerrainProject");
             if (Directory.Exists(path))
             {
+                PushUndoState(_world);
                 _world = TerrainProjectStore.LoadWorld(path);
+                _redoStack.Clear();
                 _meshDirty = true;
                 _tileOverlayDirty = true;
                 _lastAction = "Loaded SampleTerrainProject";
@@ -571,6 +623,8 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
             : $"{GetToolName(_terrainTool)}  {_brushRadius:0.0} m");
         DrawStatusDivider();
         ImGui.Text($"Cam {_cameraSpeed:0} m/s");
+        DrawStatusDivider();
+        ImGui.Text($"Undo {_undoStack.Count}  Redo {_redoStack.Count}");
 
         var actionWidth = ImGui.CalcTextSize(_lastAction).X;
         ImGui.SameLine(Math.Max(0.0f, size.X - actionWidth - 14.0f));
@@ -942,8 +996,11 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
                 return;
             }
 
+            var before = _world.Clone();
             if (_world.RemoveTile(_cursorTileCoord))
             {
+                PushUndoState(before);
+                _redoStack.Clear();
                 _meshDirty = true;
                 _tileOverlayDirty = true;
                 _lastAction = $"Removed tile {_cursorTileCoord}";
@@ -956,11 +1013,17 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
             return;
         }
 
-        if (_cursorCanAddTile && _world.AddTile(_cursorTileCoord))
+        if (_cursorCanAddTile)
         {
-            _meshDirty = true;
-            _tileOverlayDirty = true;
-            _lastAction = $"Added tile {_cursorTileCoord}";
+            var before = _world.Clone();
+            if (_world.AddTile(_cursorTileCoord))
+            {
+                PushUndoState(before);
+                _redoStack.Clear();
+                _meshDirty = true;
+                _tileOverlayDirty = true;
+                _lastAction = $"Added tile {_cursorTileCoord}";
+            }
         }
         else if (_cursorHasTile)
         {
@@ -970,6 +1033,81 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
         {
             _lastAction = "Click an exposed edge tile to add terrain";
         }
+    }
+
+    private void BeginTerrainStroke()
+    {
+        _strokeBeforeWorld ??= _world.Clone();
+        _strokeChanged = false;
+    }
+
+    private void EndTerrainStroke()
+    {
+        if (_strokeBeforeWorld is not null && _strokeChanged)
+        {
+            PushUndoState(_strokeBeforeWorld);
+            _redoStack.Clear();
+        }
+
+        _strokeBeforeWorld = null;
+        _strokeChanged = false;
+    }
+
+    private void PushUndoState(TerrainWorld state)
+    {
+        _undoStack.Add(state.Clone());
+        if (_undoStack.Count > MaxHistoryStates)
+        {
+            _undoStack.RemoveAt(0);
+        }
+    }
+
+    private void Undo()
+    {
+        EndTerrainStroke();
+        if (_undoStack.Count == 0)
+        {
+            _lastAction = "Nothing to undo";
+            return;
+        }
+
+        var previous = PopHistoryState(_undoStack);
+        _redoStack.Add(_world.Clone());
+        _world = previous.Clone();
+        MarkWorldChanged();
+        _lastAction = "Undo";
+    }
+
+    private void Redo()
+    {
+        EndTerrainStroke();
+        if (_redoStack.Count == 0)
+        {
+            _lastAction = "Nothing to redo";
+            return;
+        }
+
+        var next = PopHistoryState(_redoStack);
+        PushUndoState(_world);
+        _world = next.Clone();
+        MarkWorldChanged();
+        _lastAction = "Redo";
+    }
+
+    private static TerrainWorld PopHistoryState(List<TerrainWorld> history)
+    {
+        var index = history.Count - 1;
+        var state = history[index];
+        history.RemoveAt(index);
+        return state;
+    }
+
+    private void MarkWorldChanged()
+    {
+        _meshDirty = true;
+        _tileOverlayDirty = true;
+        _hasFlattenHeight = false;
+        UpdateCursor();
     }
 
     private void RebuildCharacterPreviewMesh()

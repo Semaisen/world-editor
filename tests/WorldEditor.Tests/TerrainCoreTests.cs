@@ -19,6 +19,36 @@ public sealed class TerrainCoreTests
     }
 
     [Fact]
+    public void TileCloneCopiesHeightAndAlbedoWithoutSharingArrays()
+    {
+        var tile = new TerrainTile(2, 2, 1);
+        tile.SetHeight(1, 1, 4.0f);
+        tile.Albedo[0] = 20;
+
+        var clone = tile.Clone();
+        tile.SetHeight(1, 1, 8.0f);
+        tile.Albedo[0] = 40;
+
+        Assert.Equal(4.0f, clone.GetHeight(1, 1), precision: 5);
+        Assert.Equal(20, clone.Albedo[0]);
+    }
+
+    [Fact]
+    public void WorldCloneCopiesTilesWithoutSharingTileData()
+    {
+        var world = new TerrainWorld();
+        Assert.True(world.AddTile(new TerrainCoord(1, 0)));
+        var tile = world.GetTile(new TerrainCoord(1, 0));
+        tile.SetHeight(2, 2, 5.0f);
+
+        var clone = world.Clone();
+        tile.SetHeight(2, 2, 9.0f);
+
+        Assert.Equal(2, clone.TileCount);
+        Assert.Equal(5.0f, clone.GetTile(new TerrainCoord(1, 0)).GetHeight(2, 2), precision: 5);
+    }
+
+    [Fact]
     public void RaiseBrushChangesSamplesInsideRadius()
     {
         var tile = new TerrainTile(4, 4, 1);

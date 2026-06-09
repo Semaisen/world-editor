@@ -43,6 +43,11 @@ public sealed class TerrainWorld
         return new TerrainWorld(new Dictionary<TerrainCoord, TerrainTile>(tiles));
     }
 
+    public TerrainWorld Clone()
+    {
+        return FromTiles(_tiles.ToDictionary(entry => entry.Key, entry => entry.Value.Clone()));
+    }
+
     public TerrainTile GetTile(TerrainCoord coord) => _tiles[coord];
 
     public bool TryGetTile(TerrainCoord coord, out TerrainTile? tile) => _tiles.TryGetValue(coord, out tile);
