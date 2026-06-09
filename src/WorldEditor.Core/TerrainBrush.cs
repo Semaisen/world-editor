@@ -1,3 +1,5 @@
+using System.Numerics;
+
 namespace WorldEditor.Core;
 
 public static class TerrainBrush
@@ -14,36 +16,42 @@ public static class TerrainBrush
         bool lower,
         BrushFalloff falloff)
     {
+        return ApplyRaiseLower(
+            world,
+            centreXMetres,
+            centreZMetres,
+            new TerrainBrushProfile(TerrainBrushShape.Circle, radiusMetres, falloff),
+            strengthMetresPerSecond,
+            deltaSeconds,
+            lower);
+    }
+
+    public static int ApplyRaiseLower(
+        TerrainWorld world,
+        float centreXMetres,
+        float centreZMetres,
+        TerrainBrushProfile brush,
+        float strengthMetresPerSecond,
+        float deltaSeconds,
+        bool lower)
+    {
         ArgumentNullException.ThrowIfNull(world);
-        if (radiusMetres <= 0 || strengthMetresPerSecond <= 0 || deltaSeconds <= 0) return 0;
+        if (brush.RadiusMetres <= 0 || strengthMetresPerSecond <= 0 || deltaSeconds <= 0) return 0;
 
-        var changed = 0;
-        foreach (var (coord, tile) in world.Tiles)
+        var direction = lower ? -1.0f : 1.0f;
+        var samples = GetWeightedSamples(world, centreXMetres, centreZMetres, brush);
+        foreach (var (sample, weight) in samples)
         {
-            var originX = coord.X * tile.WidthMetres;
-            var originZ = coord.Z * tile.DepthMetres;
-            if (!CircleIntersectsTile(centreXMetres, centreZMetres, radiusMetres, originX, originZ, tile.WidthMetres, tile.DepthMetres))
-            {
-                continue;
-            }
-
-            changed += ApplyRaiseLower(
-                tile,
-                centreXMetres - originX,
-                centreZMetres - originZ,
-                radiusMetres,
-                strengthMetresPerSecond,
-                deltaSeconds,
-                lower,
-                falloff);
+            var tile = world.GetTile(sample.Coord);
+            tile.Heights[tile.GetIndex(sample.X, sample.Z)] += direction * strengthMetresPerSecond * deltaSeconds * weight;
         }
 
-        if (changed > 0)
+        if (samples.Count > 0)
         {
             world.SynchronizeSharedEdges();
         }
 
-        return changed;
+        return samples.Count;
     }
 
     public static int ApplySmooth(
@@ -55,10 +63,27 @@ public static class TerrainBrush
         float deltaSeconds,
         BrushFalloff falloff)
     {
-        ArgumentNullException.ThrowIfNull(world);
-        if (radiusMetres <= 0 || strengthPerSecond <= 0 || deltaSeconds <= 0) return 0;
+        return ApplySmooth(
+            world,
+            centreXMetres,
+            centreZMetres,
+            new TerrainBrushProfile(TerrainBrushShape.Circle, radiusMetres, falloff),
+            strengthPerSecond,
+            deltaSeconds);
+    }
 
-        var samples = GetSamplesInRadius(world, centreXMetres, centreZMetres, radiusMetres, falloff);
+    public static int ApplySmooth(
+        TerrainWorld world,
+        float centreXMetres,
+        float centreZMetres,
+        TerrainBrushProfile brush,
+        float strengthPerSecond,
+        float deltaSeconds)
+    {
+        ArgumentNullException.ThrowIfNull(world);
+        if (brush.RadiusMetres <= 0 || strengthPerSecond <= 0 || deltaSeconds <= 0) return 0;
+
+        var samples = GetWeightedSamples(world, centreXMetres, centreZMetres, brush);
         if (samples.Count == 0) return 0;
 
         var originalHeights = new Dictionary<SampleRef, float>(samples.Count);
@@ -90,10 +115,29 @@ public static class TerrainBrush
         float deltaSeconds,
         BrushFalloff falloff)
     {
-        ArgumentNullException.ThrowIfNull(world);
-        if (radiusMetres <= 0 || strengthPerSecond <= 0 || deltaSeconds <= 0) return 0;
+        return ApplyFlatten(
+            world,
+            centreXMetres,
+            centreZMetres,
+            new TerrainBrushProfile(TerrainBrushShape.Circle, radiusMetres, falloff),
+            targetHeight,
+            strengthPerSecond,
+            deltaSeconds);
+    }
 
-        var samples = GetSamplesInRadius(world, centreXMetres, centreZMetres, radiusMetres, falloff);
+    public static int ApplyFlatten(
+        TerrainWorld world,
+        float centreXMetres,
+        float centreZMetres,
+        TerrainBrushProfile brush,
+        float targetHeight,
+        float strengthPerSecond,
+        float deltaSeconds)
+    {
+        ArgumentNullException.ThrowIfNull(world);
+        if (brush.RadiusMetres <= 0 || strengthPerSecond <= 0 || deltaSeconds <= 0) return 0;
+
+        var samples = GetWeightedSamples(world, centreXMetres, centreZMetres, brush);
         foreach (var (sample, weight) in samples)
         {
             var tile = world.GetTile(sample.Coord);
@@ -105,6 +149,56 @@ public static class TerrainBrush
         if (samples.Count > 0)
         {
             world.SynchronizeSharedEdges();
+        }
+
+        return samples.Count;
+    }
+
+    public static int ApplyPaint(
+        TerrainWorld world,
+        float centreXMetres,
+        float centreZMetres,
+        float radiusMetres,
+        Vector3 color,
+        float strengthPerSecond,
+        float deltaSeconds,
+        BrushFalloff falloff)
+    {
+        return ApplyPaint(
+            world,
+            centreXMetres,
+            centreZMetres,
+            new TerrainBrushProfile(TerrainBrushShape.Circle, radiusMetres, falloff),
+            color,
+            strengthPerSecond,
+            deltaSeconds);
+    }
+
+    public static int ApplyPaint(
+        TerrainWorld world,
+        float centreXMetres,
+        float centreZMetres,
+        TerrainBrushProfile brush,
+        Vector3 color,
+        float strengthPerSecond,
+        float deltaSeconds)
+    {
+        ArgumentNullException.ThrowIfNull(world);
+        if (brush.RadiusMetres <= 0 || strengthPerSecond <= 0 || deltaSeconds <= 0) return 0;
+
+        var targetR = Math.Clamp(color.X, 0.0f, 1.0f) * 255.0f;
+        var targetG = Math.Clamp(color.Y, 0.0f, 1.0f) * 255.0f;
+        var targetB = Math.Clamp(color.Z, 0.0f, 1.0f) * 255.0f;
+        var samples = GetWeightedSamples(world, centreXMetres, centreZMetres, brush);
+        foreach (var (sample, weight) in samples)
+        {
+            var tile = world.GetTile(sample.Coord);
+            var index = tile.GetIndex(sample.X, sample.Z) * 4;
+            var amount = Math.Clamp(strengthPerSecond * deltaSeconds * weight, 0.0f, 1.0f);
+            tile.Albedo[index] = LerpByte(tile.Albedo[index], targetR, amount);
+            tile.Albedo[index + 1] = LerpByte(tile.Albedo[index + 1], targetG, amount);
+            tile.Albedo[index + 2] = LerpByte(tile.Albedo[index + 2], targetB, amount);
+            tile.Albedo[index + 3] = 255;
         }
 
         return samples.Count;
@@ -152,8 +246,17 @@ public static class TerrainBrush
         return changed;
     }
 
-    private static bool CircleIntersectsTile(float centreX, float centreZ, float radius, float tileX, float tileZ, float tileWidth, float tileDepth)
+    private static bool BrushIntersectsTile(float centreX, float centreZ, TerrainBrushProfile brush, float tileX, float tileZ, float tileWidth, float tileDepth)
     {
+        var radius = brush.RadiusMetres;
+        if (brush.Shape == TerrainBrushShape.Square)
+        {
+            return centreX + radius >= tileX &&
+                centreX - radius <= tileX + tileWidth &&
+                centreZ + radius >= tileZ &&
+                centreZ - radius <= tileZ + tileDepth;
+        }
+
         var closestX = Math.Clamp(centreX, tileX, tileX + tileWidth);
         var closestZ = Math.Clamp(centreZ, tileZ, tileZ + tileDepth);
         var dx = centreX - closestX;
@@ -161,16 +264,17 @@ public static class TerrainBrush
         return dx * dx + dz * dz <= radius * radius;
     }
 
-    private static Dictionary<SampleRef, float> GetSamplesInRadius(TerrainWorld world, float centreXMetres, float centreZMetres, float radiusMetres, BrushFalloff falloff)
+    private static Dictionary<SampleRef, float> GetWeightedSamples(TerrainWorld world, float centreXMetres, float centreZMetres, TerrainBrushProfile brush)
     {
         var samples = new Dictionary<SampleRef, float>();
+        var radiusMetres = brush.RadiusMetres;
         var radiusSq = radiusMetres * radiusMetres;
 
         foreach (var (coord, tile) in world.Tiles)
         {
             var originX = coord.X * tile.WidthMetres;
             var originZ = coord.Z * tile.DepthMetres;
-            if (!CircleIntersectsTile(centreXMetres, centreZMetres, radiusMetres, originX, originZ, tile.WidthMetres, tile.DepthMetres))
+            if (!BrushIntersectsTile(centreXMetres, centreZMetres, brush, originX, originZ, tile.WidthMetres, tile.DepthMetres))
             {
                 continue;
             }
@@ -190,16 +294,69 @@ public static class TerrainBrush
                     var sampleX = originX + x * tile.ResolutionMetres;
                     var dx = sampleX - centreXMetres;
                     var dz = sampleZ - centreZMetres;
-                    var distSq = dx * dx + dz * dz;
-                    if (distSq > radiusSq) continue;
+                    var weight = brush.Shape == TerrainBrushShape.Square
+                        ? GetSquareWeight(dx, dz, radiusMetres, brush.Falloff)
+                        : GetCircleWeight(dx, dz, radiusMetres, radiusSq, brush.Falloff);
+                    if (weight < 0.0f) continue;
 
-                    var t = 1.0f - MathF.Sqrt(distSq) / radiusMetres;
-                    samples[new SampleRef(coord, x, z)] = falloff == BrushFalloff.Smooth ? t * t * (3.0f - 2.0f * t) : t;
+                    if (brush.Shape == TerrainBrushShape.Noise)
+                    {
+                        var noise = ValueNoise(sampleX * brush.NoiseScale, sampleZ * brush.NoiseScale);
+                        var noiseAmount = Math.Clamp(brush.NoiseAmount, 0.0f, 1.0f);
+                        weight *= Lerp(1.0f - noiseAmount, 1.0f, noise);
+                    }
+
+                    samples[new SampleRef(coord, x, z)] = weight;
                 }
             }
         }
 
         return samples;
+    }
+
+    private static float GetCircleWeight(float dx, float dz, float radiusMetres, float radiusSq, BrushFalloff falloff)
+    {
+        var distSq = dx * dx + dz * dz;
+        if (distSq > radiusSq) return -1.0f;
+
+        var t = 1.0f - MathF.Sqrt(distSq) / radiusMetres;
+        return ApplyFalloff(t, falloff);
+    }
+
+    private static float GetSquareWeight(float dx, float dz, float radiusMetres, BrushFalloff falloff)
+    {
+        var absX = MathF.Abs(dx);
+        var absZ = MathF.Abs(dz);
+        if (absX > radiusMetres || absZ > radiusMetres) return -1.0f;
+
+        var t = 1.0f - MathF.Max(absX, absZ) / radiusMetres;
+        return ApplyFalloff(t, falloff);
+    }
+
+    private static float ApplyFalloff(float t, BrushFalloff falloff)
+    {
+        t = Math.Clamp(t, 0.0f, 1.0f);
+        return falloff == BrushFalloff.Smooth ? t * t * (3.0f - 2.0f * t) : t;
+    }
+
+    private static float ValueNoise(float x, float z)
+    {
+        var x0 = (int)MathF.Floor(x);
+        var z0 = (int)MathF.Floor(z);
+        var tx = x - x0;
+        var tz = z - z0;
+        var sx = tx * tx * (3.0f - 2.0f * tx);
+        var sz = tz * tz * (3.0f - 2.0f * tz);
+        var north = Lerp(HashNoise(x0, z0), HashNoise(x0 + 1, z0), sx);
+        var south = Lerp(HashNoise(x0, z0 + 1), HashNoise(x0 + 1, z0 + 1), sx);
+        return Lerp(north, south, sz);
+    }
+
+    private static float HashNoise(int x, int z)
+    {
+        var hash = unchecked((uint)(x * 374761393 + z * 668265263));
+        hash = (hash ^ (hash >> 13)) * 1274126177u;
+        return (hash ^ (hash >> 16)) / (float)uint.MaxValue;
     }
 
     private static float GetNeighbourAverage(TerrainWorld world, IReadOnlyDictionary<SampleRef, float> originalHeights, SampleRef sample)
@@ -267,4 +424,9 @@ public static class TerrainBrush
     }
 
     private static float Lerp(float from, float to, float amount) => from + (to - from) * amount;
+
+    private static byte LerpByte(byte from, float to, float amount)
+    {
+        return (byte)Math.Clamp((int)MathF.Round(Lerp(from, to, amount)), byte.MinValue, byte.MaxValue);
+    }
 }

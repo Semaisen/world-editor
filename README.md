@@ -27,11 +27,14 @@ The terrain preview uses directional lighting, slope shading, and subtle height 
 - Ctrl + left mouse drag: lower terrain
 - Smooth tool + left mouse drag: smooth height changes
 - Flatten tool + left mouse drag: flatten to the height sampled when the stroke starts
+- Paint tool + left mouse drag: softly blend the selected color into terrain albedo
+- Brush Shape: choose Circle, Square, or Noise footprints for sculpt and paint tools
+- Noise brush: use Noise Scale and Noise Amount to vary brush strength procedurally
 - Tile Mode button: click exposed ghost tiles to add terrain chunks
 - Tile Mode + Ctrl + left click: remove a tile when the terrain stays connected
 - Added tiles blend from connected edges, and sculpt brushes affect every tile under the brush radius.
 - 1/2: decrease/increase brush radius
-- 3/4: decrease/increase brush strength
+- 3/4: decrease/increase active brush strength
 - Ctrl+S: save `SampleTerrainProject`
 - Ctrl+O: load `SampleTerrainProject`
 - Ctrl+P: export `GodotExport`

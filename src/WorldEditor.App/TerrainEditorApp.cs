@@ -38,8 +38,13 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
     private bool _tileOverlayDirty = true;
     private bool _tileMode;
     private TerrainTool _terrainTool = TerrainTool.RaiseLower;
+    private TerrainBrushShape _brushShape = TerrainBrushShape.Circle;
     private float _brushRadius = 2.0f;
     private float _brushStrength = 1.5f;
+    private float _noiseScale = 0.18f;
+    private float _noiseAmount = 0.55f;
+    private Vector3 _paintColor = new(88.0f / 255.0f, 122.0f / 255.0f, 74.0f / 255.0f);
+    private float _paintStrength = 3.0f;
     private float _flattenHeight;
     private bool _hasFlattenHeight;
     private BrushFalloff _brushFalloff = BrushFalloff.Smooth;
@@ -129,8 +134,29 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
         if (_keys.Contains(Key.E)) _camera.Position += Vector3.UnitY * moveSpeed;
         if (!uiHasMouse && _keys.Contains(Key.Number1)) _brushRadius = Math.Max(0.1f, _brushRadius - 8.0f * deltaSeconds);
         if (!uiHasMouse && _keys.Contains(Key.Number2)) _brushRadius = Math.Min(50.0f, _brushRadius + 8.0f * deltaSeconds);
-        if (!uiHasMouse && _keys.Contains(Key.Number3)) _brushStrength = Math.Max(0.1f, _brushStrength - 4.0f * deltaSeconds);
-        if (!uiHasMouse && _keys.Contains(Key.Number4)) _brushStrength = Math.Min(20.0f, _brushStrength + 4.0f * deltaSeconds);
+        if (!uiHasMouse && _keys.Contains(Key.Number3))
+        {
+            if (_terrainTool == TerrainTool.Paint)
+            {
+                _paintStrength = Math.Max(0.1f, _paintStrength - 4.0f * deltaSeconds);
+            }
+            else
+            {
+                _brushStrength = Math.Max(0.1f, _brushStrength - 4.0f * deltaSeconds);
+            }
+        }
+
+        if (!uiHasMouse && _keys.Contains(Key.Number4))
+        {
+            if (_terrainTool == TerrainTool.Paint)
+            {
+                _paintStrength = Math.Min(10.0f, _paintStrength + 4.0f * deltaSeconds);
+            }
+            else
+            {
+                _brushStrength = Math.Min(20.0f, _brushStrength + 4.0f * deltaSeconds);
+            }
+        }
 
         var mouseDelta = _mouse - _lastMouse;
         if (!uiHasMouse && _rightMouseDown) _camera.Rotate(mouseDelta.X, mouseDelta.Y);
@@ -316,6 +342,7 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
             DrawToolButton("[+/-]", "Raise / Lower", TerrainTool.RaiseLower);
             DrawToolButton("[~]", "Smooth", TerrainTool.Smooth);
             DrawToolButton("[=]", "Flatten", TerrainTool.Flatten);
+            DrawToolButton("[#]", "Paint", TerrainTool.Paint);
         }
 
         ImGui.TextWrapped(_tileMode ? "Click ghost edges to add. Ctrl-click tiles to remove." : GetToolHelpText());
@@ -327,8 +354,29 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
         ImGui.Separator();
 
         ImGui.Text("Brush");
+        var brushShape = (int)_brushShape;
+        if (ImGui.Combo("Brush Shape", ref brushShape, "Circle\0Square\0Noise\0"))
+        {
+            _brushShape = (TerrainBrushShape)brushShape;
+        }
+
         ImGui.SliderFloat("Radius (m)", ref _brushRadius, 0.1f, 50.0f, "%.1f");
-        ImGui.SliderFloat("Strength", ref _brushStrength, 0.1f, 20.0f, "%.1f m/s");
+        if (_brushShape == TerrainBrushShape.Noise)
+        {
+            ImGui.SliderFloat("Noise Scale", ref _noiseScale, 0.01f, 1.0f, "%.2f");
+            ImGui.SliderFloat("Noise Amount", ref _noiseAmount, 0.0f, 1.0f, "%.2f");
+        }
+
+        if (_terrainTool == TerrainTool.Paint)
+        {
+            ImGui.ColorEdit3("Color", ref _paintColor);
+            ImGui.SliderFloat("Paint Strength", ref _paintStrength, 0.1f, 10.0f, "%.1f /s");
+        }
+        else
+        {
+            ImGui.SliderFloat("Strength", ref _brushStrength, 0.1f, 20.0f, "%.1f m/s");
+        }
+
         var falloff = _brushFalloff == BrushFalloff.Smooth ? 1 : 0;
         if (ImGui.Combo("Falloff", ref falloff, "Linear\0Smooth\0"))
         {
@@ -421,6 +469,7 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
         {
             TerrainTool.Smooth => ApplySmoothTool(deltaSeconds),
             TerrainTool.Flatten => ApplyFlattenTool(deltaSeconds),
+            TerrainTool.Paint => ApplyPaintTool(deltaSeconds),
             _ => ApplyRaiseLowerTool(deltaSeconds)
         };
     }
@@ -428,7 +477,7 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
     private int ApplyRaiseLowerTool(float deltaSeconds)
     {
         var lowered = _keys.Contains(Key.ControlLeft) || _keys.Contains(Key.ControlRight);
-        var changed = TerrainBrush.ApplyRaiseLower(_world, _cursor.X, _cursor.Z, _brushRadius, _brushStrength, deltaSeconds, lowered, _brushFalloff);
+        var changed = TerrainBrush.ApplyRaiseLower(_world, _cursor.X, _cursor.Z, CreateBrushProfile(), _brushStrength, deltaSeconds, lowered);
         if (changed > 0)
         {
             _lastAction = lowered ? $"Lowered {changed} samples" : $"Raised {changed} samples";
@@ -439,7 +488,7 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
 
     private int ApplySmoothTool(float deltaSeconds)
     {
-        var changed = TerrainBrush.ApplySmooth(_world, _cursor.X, _cursor.Z, _brushRadius, _brushStrength, deltaSeconds, _brushFalloff);
+        var changed = TerrainBrush.ApplySmooth(_world, _cursor.X, _cursor.Z, CreateBrushProfile(), _brushStrength, deltaSeconds);
         if (changed > 0)
         {
             _lastAction = $"Smoothed {changed} samples";
@@ -456,7 +505,7 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
             _hasFlattenHeight = true;
         }
 
-        var changed = TerrainBrush.ApplyFlatten(_world, _cursor.X, _cursor.Z, _brushRadius, _flattenHeight, _brushStrength, deltaSeconds, _brushFalloff);
+        var changed = TerrainBrush.ApplyFlatten(_world, _cursor.X, _cursor.Z, CreateBrushProfile(), _flattenHeight, _brushStrength, deltaSeconds);
         if (changed > 0)
         {
             _lastAction = $"Flattened {changed} samples to {_flattenHeight:0.00} m";
@@ -465,10 +514,27 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
         return changed;
     }
 
+    private int ApplyPaintTool(float deltaSeconds)
+    {
+        var changed = TerrainBrush.ApplyPaint(_world, _cursor.X, _cursor.Z, CreateBrushProfile(), _paintColor, _paintStrength, deltaSeconds);
+        if (changed > 0)
+        {
+            _lastAction = $"Painted {changed} samples";
+        }
+
+        return changed;
+    }
+
+    private TerrainBrushProfile CreateBrushProfile()
+    {
+        return new TerrainBrushProfile(_brushShape, _brushRadius, _brushFalloff, _noiseScale, _noiseAmount);
+    }
+
     private string GetToolHelpText() => _terrainTool switch
     {
         TerrainTool.Smooth => "Left-drag smooths terrain. Larger radius blends broader shapes.",
         TerrainTool.Flatten => "Left-drag flattens to the height sampled at stroke start.",
+        TerrainTool.Paint => "Left-drag paints terrain color with the selected brush color.",
         _ => "Left-drag raises. Hold Ctrl to lower."
     };
 
@@ -585,6 +651,12 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
     {
         if (_gl is null) return;
 
+        if (_brushShape == TerrainBrushShape.Square)
+        {
+            RebuildSquareBrushMesh();
+            return;
+        }
+
         const int segments = 96;
         var vertices = new List<float>(segments * 10);
         var indices = new List<uint>(segments * 2);
@@ -604,6 +676,31 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
             indices.Add((uint)i);
             indices.Add((uint)((i + 1) % segments));
         }
+
+        _brushMesh?.Dispose();
+        _brushMesh = MeshBuffer.Create(_gl, CollectionsMarshal.AsSpan(vertices), CollectionsMarshal.AsSpan(indices));
+    }
+
+    private void RebuildSquareBrushMesh()
+    {
+        if (_gl is null) return;
+
+        var vertices = new List<float>(4 * 10);
+        var indices = new List<uint>(8);
+        var y = _cursor.Y + 0.08f;
+        var color = new Vector4(1.0f, 0.85f, 0.25f, 1.0f);
+        AddLineVertex(vertices, _cursor.X - _brushRadius, y, _cursor.Z - _brushRadius, color);
+        AddLineVertex(vertices, _cursor.X + _brushRadius, y, _cursor.Z - _brushRadius, color);
+        AddLineVertex(vertices, _cursor.X + _brushRadius, y, _cursor.Z + _brushRadius, color);
+        AddLineVertex(vertices, _cursor.X - _brushRadius, y, _cursor.Z + _brushRadius, color);
+        indices.Add(0);
+        indices.Add(1);
+        indices.Add(1);
+        indices.Add(2);
+        indices.Add(2);
+        indices.Add(3);
+        indices.Add(3);
+        indices.Add(0);
 
         _brushMesh?.Dispose();
         _brushMesh = MeshBuffer.Create(_gl, CollectionsMarshal.AsSpan(vertices), CollectionsMarshal.AsSpan(indices));
@@ -802,7 +899,8 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
 
     private void UpdateTitle()
     {
-        var tool = _tileMode ? "Tile Mode" : $"{GetToolName(_terrainTool)} | Radius {_brushRadius:0.0}m Strength {_brushStrength:0.0}m/s";
+        var strength = _terrainTool == TerrainTool.Paint ? $"Paint {_paintStrength:0.0}/s" : $"Strength {_brushStrength:0.0}m/s";
+        var tool = _tileMode ? "Tile Mode" : $"{GetToolName(_terrainTool)} | {GetBrushShapeName(_brushShape)} Radius {_brushRadius:0.0}m {strength}";
         _window.Title = $"World Editor | X {_cursor.X:0.0}m Y {_cursor.Y:0.0}m Z {_cursor.Z:0.0}m | Tile {_cursorTileCoord} | {tool} | Ctrl+S save Ctrl+O load Ctrl+P export | {_lastAction}";
     }
 
@@ -885,6 +983,15 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
         TerrainTool.RaiseLower => "Raise / Lower",
         TerrainTool.Smooth => "Smooth",
         TerrainTool.Flatten => "Flatten",
+        TerrainTool.Paint => "Paint",
+        _ => "Unknown"
+    };
+
+    private static string GetBrushShapeName(TerrainBrushShape shape) => shape switch
+    {
+        TerrainBrushShape.Circle => "Circle",
+        TerrainBrushShape.Square => "Square",
+        TerrainBrushShape.Noise => "Noise",
         _ => "Unknown"
     };
 
@@ -940,6 +1047,7 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
     {
         RaiseLower,
         Smooth,
-        Flatten
+        Flatten,
+        Paint
     }
 }
