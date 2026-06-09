@@ -12,6 +12,10 @@ namespace WorldEditor.App;
 internal sealed unsafe class TerrainEditorApp : IDisposable
 {
     private const int PreviewStride = 4;
+    private const float MinCameraSpeed = 5.0f;
+    private const float MaxCameraSpeed = 140.0f;
+    private const float CameraSpeedStep = 5.0f;
+    private const float CameraSpeedBoost = 2.0f;
     private readonly IWindow _window;
     private readonly Camera _camera = new();
     private readonly HashSet<Key> _keys = [];
@@ -47,6 +51,7 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
     private bool _cursorCanAddTile;
     private string _lastAction = "Ready";
     private float _mouseWheel;
+    private float _cameraSpeed = 35.0f;
     private bool _resourcesDisposed;
 
     public TerrainEditorApp()
@@ -109,14 +114,19 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
         DrawToolbar();
 
         var uiHasMouse = _imgui?.WantsMouse ?? false;
-        var moveSpeed = 35.0f * deltaSeconds;
+        if (!uiHasMouse && _mouseWheel != 0)
+        {
+            _cameraSpeed = Math.Clamp(_cameraSpeed + (_mouseWheel * CameraSpeedStep), MinCameraSpeed, MaxCameraSpeed);
+        }
+
+        var speedBoost = _keys.Contains(Key.ShiftLeft) || _keys.Contains(Key.ShiftRight);
+        var moveSpeed = _cameraSpeed * (speedBoost ? CameraSpeedBoost : 1.0f) * deltaSeconds;
         if (_keys.Contains(Key.W)) _camera.Position += _camera.Forward * moveSpeed;
         if (_keys.Contains(Key.S)) _camera.Position -= _camera.Forward * moveSpeed;
         if (_keys.Contains(Key.A)) _camera.Position -= _camera.Right * moveSpeed;
         if (_keys.Contains(Key.D)) _camera.Position += _camera.Right * moveSpeed;
         if (_keys.Contains(Key.Q)) _camera.Position -= Vector3.UnitY * moveSpeed;
         if (_keys.Contains(Key.E)) _camera.Position += Vector3.UnitY * moveSpeed;
-        if (!uiHasMouse && _mouseWheel != 0) _camera.Position += _camera.Forward * _mouseWheel * 4.0f;
         if (!uiHasMouse && _keys.Contains(Key.Number1)) _brushRadius = Math.Max(0.1f, _brushRadius - 8.0f * deltaSeconds);
         if (!uiHasMouse && _keys.Contains(Key.Number2)) _brushRadius = Math.Min(50.0f, _brushRadius + 8.0f * deltaSeconds);
         if (!uiHasMouse && _keys.Contains(Key.Number3)) _brushStrength = Math.Max(0.1f, _brushStrength - 4.0f * deltaSeconds);
@@ -309,6 +319,11 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
         }
 
         ImGui.TextWrapped(_tileMode ? "Click ghost edges to add. Ctrl-click tiles to remove." : GetToolHelpText());
+        ImGui.Separator();
+
+        ImGui.Text("Camera");
+        var cameraSpeedRatio = (_cameraSpeed - MinCameraSpeed) / (MaxCameraSpeed - MinCameraSpeed);
+        ImGui.ProgressBar(cameraSpeedRatio, new Vector2(-1, 18), $"{_cameraSpeed:0} m/s");
         ImGui.Separator();
 
         ImGui.Text("Brush");

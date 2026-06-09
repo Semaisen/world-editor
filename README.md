@@ -19,9 +19,10 @@ The terrain preview uses directional lighting, slope shading, and subtle height 
 
 - Right mouse drag: rotate camera
 - Middle mouse drag: pan camera
-- Mouse wheel: zoom
+- Mouse wheel: increase/decrease camera movement speed
 - WASD: move camera
 - Q/E: move camera down/up
+- Shift while moving: double camera movement speed
 - Left mouse drag: raise terrain
 - Ctrl + left mouse drag: lower terrain
 - Smooth tool + left mouse drag: smooth height changes
