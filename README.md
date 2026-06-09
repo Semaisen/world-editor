@@ -17,7 +17,7 @@ dotnet run --project src\WorldEditor.App\WorldEditor.App.csproj
 The editor uses a dark charcoal theme with an orange accent, arranged in four regions:
 
 - Top header bar: app title plus New / Save / Load and an accented Export button
-- Left tool rail: icon buttons for Raise/Lower, Smooth, Flatten, Paint, and Tile Mode (the active tool is highlighted in orange; hover for tooltips)
+- Left tool rail: icon buttons for Raise/Lower, Smooth, Flatten, Paint, Erosion, Hydraulic, and Tile Mode (the active tool is highlighted in orange; hover for tooltips)
 - Right properties panel: contextual sections for the active tool, brush settings, view mode, and camera speed
 - Bottom status bar: cursor position, tile coordinate, active tool, camera speed, and the last action
 
@@ -34,6 +34,8 @@ The terrain preview uses directional lighting, slope shading, and subtle height 
 - Smooth tool + left mouse drag: smooth height changes
 - Flatten tool + left mouse drag: flatten to the height sampled when the stroke starts
 - Paint tool + left mouse drag: softly blend the selected color into terrain albedo
+- Erosion tool + left mouse drag: weather slopes steeper than the talus angle, moving material into lower neighbours
+- Hydraulic tool + left mouse drag: rain droplets inside the brush that flow downhill, carving channels and depositing sediment (Rain Rate slider controls droplets per second)
 - Brush Shape: choose Circle, Square, or Noise footprints for sculpt and paint tools
 - Noise brush: use Noise Scale and Noise Amount to vary brush strength procedurally
 - Tile Mode button: click exposed ghost tiles to add terrain chunks

@@ -6,6 +6,14 @@ public static class TerrainBrush
 {
     private readonly record struct SampleRef(TerrainCoord Coord, int X, int Z);
 
+    private static readonly (int Dx, int Dz)[] CardinalOffsets =
+    [
+        (1, 0),
+        (-1, 0),
+        (0, 1),
+        (0, -1)
+    ];
+
     public static int ApplyRaiseLower(
         TerrainWorld world,
         float centreXMetres,
@@ -152,6 +160,75 @@ public static class TerrainBrush
         }
 
         return samples.Count;
+    }
+
+    public static int ApplyThermalErosion(
+        TerrainWorld world,
+        float centreXMetres,
+        float centreZMetres,
+        TerrainBrushProfile brush,
+        float talusAngleDegrees,
+        float strengthPerSecond,
+        float deltaSeconds)
+    {
+        ArgumentNullException.ThrowIfNull(world);
+        if (brush.RadiusMetres <= 0 || strengthPerSecond <= 0 || deltaSeconds <= 0) return 0;
+
+        var samples = GetWeightedSamples(world, centreXMetres, centreZMetres, brush);
+        if (samples.Count == 0) return 0;
+
+        var originalHeights = new Dictionary<SampleRef, float>(samples.Count);
+        foreach (var sample in samples.Keys)
+        {
+            originalHeights[sample] = world.GetTile(sample.Coord).GetHeight(sample.X, sample.Z);
+        }
+
+        var talusTangent = MathF.Tan(Math.Clamp(talusAngleDegrees, 0.1f, 89.0f) * MathF.PI / 180.0f);
+        var changed = 0;
+
+        foreach (var (sample, weight) in samples)
+        {
+            var tile = world.GetTile(sample.Coord);
+            var current = originalHeights[sample];
+            var threshold = talusTangent * tile.ResolutionMetres;
+            var delta = 0.0f;
+            var neighbourCount = 0;
+
+            foreach (var (dx, dz) in CardinalOffsets)
+            {
+                if (!TryResolveSample(world, sample.Coord, sample.X + dx, sample.Z + dz, tile, out var neighbour)) continue;
+
+                neighbourCount++;
+                var neighbourHeight = originalHeights.TryGetValue(neighbour, out var height)
+                    ? height
+                    : world.GetTile(neighbour.Coord).GetHeight(neighbour.X, neighbour.Z);
+                var diff = current - neighbourHeight;
+                if (diff > threshold)
+                {
+                    delta -= diff - threshold;
+                }
+                else if (diff < -threshold)
+                {
+                    delta += -diff - threshold;
+                }
+            }
+
+            if (neighbourCount == 0 || MathF.Abs(delta) < 1e-6f) continue;
+
+            var amount = Math.Clamp(strengthPerSecond * deltaSeconds * weight, 0.0f, 1.0f);
+            // Cap each update at half the slope excess split across neighbours so
+            // repeated applications converge on the talus angle without overshooting.
+            var scale = 0.5f / neighbourCount;
+            tile.SetHeight(sample.X, sample.Z, current + delta * amount * scale);
+            changed++;
+        }
+
+        if (changed > 0)
+        {
+            world.SynchronizeSharedEdges();
+        }
+
+        return changed;
     }
 
     public static int ApplyPaint(

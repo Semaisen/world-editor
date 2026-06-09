@@ -231,6 +231,145 @@ public sealed class TerrainCoreTests
     }
 
     [Fact]
+    public void ThermalErosionLowersSpikeAndRaisesNeighbours()
+    {
+        var world = TerrainWorld.FromSingleTile(new TerrainTile(4, 4, 1));
+        var tile = world.GetTile(new TerrainCoord(0, 0));
+        tile.SetHeight(2, 2, 10.0f);
+        var brush = new TerrainBrushProfile(TerrainBrushShape.Circle, 2.5f, BrushFalloff.Linear);
+
+        var changed = TerrainBrush.ApplyThermalErosion(world, 2, 2, brush, talusAngleDegrees: 34.0f, strengthPerSecond: 10.0f, deltaSeconds: 0.5f);
+
+        Assert.True(changed > 0);
+        Assert.True(tile.GetHeight(2, 2) < 10.0f);
+        Assert.True(tile.GetHeight(1, 2) > 0.0f);
+        Assert.True(tile.GetHeight(2, 1) > 0.0f);
+    }
+
+    [Fact]
+    public void ThermalErosionLeavesShallowSlopesAlone()
+    {
+        var world = TerrainWorld.FromSingleTile(new TerrainTile(4, 4, 1));
+        var tile = world.GetTile(new TerrainCoord(0, 0));
+        for (var z = 0; z < tile.HeightmapHeight; z++)
+        {
+            for (var x = 0; x < tile.HeightmapWidth; x++)
+            {
+                tile.SetHeight(x, z, x * 0.2f);
+            }
+        }
+
+        var brush = new TerrainBrushProfile(TerrainBrushShape.Circle, 2.5f, BrushFalloff.Linear);
+        var changed = TerrainBrush.ApplyThermalErosion(world, 2, 2, brush, talusAngleDegrees: 34.0f, strengthPerSecond: 10.0f, deltaSeconds: 0.5f);
+
+        Assert.Equal(0, changed);
+        Assert.Equal(0.4f, tile.GetHeight(2, 2), precision: 5);
+    }
+
+    [Fact]
+    public void ThermalErosionKeepsTileBoundaryHeightsInSync()
+    {
+        var world = TerrainWorld.FromSingleTile(new TerrainTile(4, 4, 1));
+        Assert.True(world.AddTile(new TerrainCoord(1, 0)));
+        var west = world.GetTile(new TerrainCoord(0, 0));
+        var east = world.GetTile(new TerrainCoord(1, 0));
+        west.SetHeight(west.HeightmapWidth - 1, 2, 8.0f);
+        east.SetHeight(0, 2, 8.0f);
+        var brush = new TerrainBrushProfile(TerrainBrushShape.Circle, 2.5f, BrushFalloff.Linear);
+
+        var changed = TerrainBrush.ApplyThermalErosion(world, 4, 2, brush, talusAngleDegrees: 34.0f, strengthPerSecond: 10.0f, deltaSeconds: 0.5f);
+
+        Assert.True(changed > 0);
+        Assert.True(west.GetHeight(west.HeightmapWidth - 1, 2) < 8.0f);
+        Assert.Equal(west.GetHeight(west.HeightmapWidth - 1, 2), east.GetHeight(0, 2), precision: 5);
+    }
+
+    [Fact]
+    public void HydraulicErosionLeavesFlatTerrainUnchanged()
+    {
+        var world = TerrainWorld.FromSingleTile(new TerrainTile(8, 8, 1));
+        var tile = world.GetTile(new TerrainCoord(0, 0));
+
+        var changed = HydraulicErosion.Simulate(world, 4, 4, 3.0f, 100, HydraulicErosionSettings.Default, seed: 42);
+
+        Assert.Equal(0, changed);
+        Assert.All(tile.Heights, height => Assert.Equal(0.0f, height, precision: 5));
+    }
+
+    [Fact]
+    public void HydraulicErosionCarvesSlopesAndDepositsSediment()
+    {
+        var world = TerrainWorld.FromSingleTile(CreateConeTile());
+        var tile = world.GetTile(new TerrainCoord(0, 0));
+        var original = (float[])tile.Heights.Clone();
+
+        var changed = HydraulicErosion.Simulate(world, 8, 8, 4.0f, 300, HydraulicErosionSettings.Default, seed: 1234);
+
+        Assert.True(changed > 0);
+        var lowered = false;
+        var raised = false;
+        for (var i = 0; i < tile.Heights.Length; i++)
+        {
+            if (tile.Heights[i] < original[i] - 1e-4f) lowered = true;
+            if (tile.Heights[i] > original[i] + 1e-4f) raised = true;
+        }
+
+        Assert.True(lowered);
+        Assert.True(raised);
+    }
+
+    [Fact]
+    public void HydraulicErosionIsDeterministicForSeed()
+    {
+        var worldA = TerrainWorld.FromSingleTile(CreateConeTile());
+        var worldB = TerrainWorld.FromSingleTile(CreateConeTile());
+
+        HydraulicErosion.Simulate(worldA, 8, 8, 4.0f, 200, HydraulicErosionSettings.Default, seed: 99);
+        HydraulicErosion.Simulate(worldB, 8, 8, 4.0f, 200, HydraulicErosionSettings.Default, seed: 99);
+
+        var tileA = worldA.GetTile(new TerrainCoord(0, 0));
+        var tileB = worldB.GetTile(new TerrainCoord(0, 0));
+        for (var i = 0; i < tileA.Heights.Length; i++)
+        {
+            Assert.Equal(tileA.Heights[i], tileB.Heights[i], precision: 6);
+        }
+    }
+
+    [Fact]
+    public void HydraulicErosionKeepsTileBoundaryHeightsInSync()
+    {
+        var world = TerrainWorld.FromSingleTile(new TerrainTile(8, 8, 1));
+        Assert.True(world.AddTile(new TerrainCoord(1, 0)));
+        var brush = new TerrainBrushProfile(TerrainBrushShape.Circle, 2.5f, BrushFalloff.Linear);
+        TerrainBrush.ApplyRaiseLower(world, 8, 4, brush, 4.0f, 1.0f, lower: false);
+
+        var changed = HydraulicErosion.Simulate(world, 8, 4, 3.0f, 300, HydraulicErosionSettings.Default, seed: 7);
+        var west = world.GetTile(new TerrainCoord(0, 0));
+        var east = world.GetTile(new TerrainCoord(1, 0));
+
+        Assert.True(changed > 0);
+        for (var z = 0; z < west.HeightmapHeight; z++)
+        {
+            Assert.Equal(west.GetHeight(west.HeightmapWidth - 1, z), east.GetHeight(0, z), precision: 4);
+        }
+    }
+
+    private static TerrainTile CreateConeTile()
+    {
+        var tile = new TerrainTile(16, 16, 1);
+        for (var z = 0; z < tile.HeightmapHeight; z++)
+        {
+            for (var x = 0; x < tile.HeightmapWidth; x++)
+            {
+                var distance = MathF.Sqrt((x - 8) * (x - 8) + (z - 8) * (z - 8));
+                tile.SetHeight(x, z, MathF.Max(0.0f, 6.0f - distance));
+            }
+        }
+
+        return tile;
+    }
+
+    [Fact]
     public void FlattenBrushAffectsBothSidesOfTileBoundary()
     {
         var world = TerrainWorld.FromSingleTile(new TerrainTile(4, 4, 1));

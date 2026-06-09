@@ -65,6 +65,10 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
     private float _paintStrength = 3.0f;
     private float _flattenHeight;
     private bool _hasFlattenHeight;
+    private float _talusAngleDegrees = 34.0f;
+    private float _rainRate = 120.0f;
+    private float _dropletAccumulator;
+    private readonly Random _dropletRandom = new();
     private BrushFalloff _brushFalloff = BrushFalloff.Smooth;
     private TerrainViewMode _viewMode = TerrainViewMode.Albedo;
     private Vector3 _cursor = new(64, 0, 64);
@@ -471,6 +475,8 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
         DrawRailToolButton("~", "Smooth", "Left-drag smooths height changes", TerrainTool.Smooth);
         DrawRailToolButton("=", "Flatten", "Left-drag flattens to the stroke-start height", TerrainTool.Flatten);
         DrawRailToolButton("@", "Paint", "Left-drag blends color into the terrain", TerrainTool.Paint);
+        DrawRailToolButton("%", "Erosion", "Left-drag weathers slopes steeper than the talus angle", TerrainTool.Erosion);
+        DrawRailToolButton("*", "Hydraulic", "Left-drag rains droplets that carve channels and deposit sediment", TerrainTool.Hydraulic);
 
         ImGui.Separator();
 
@@ -568,12 +574,27 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
                 ImGui.SliderFloat("##paintstrength", ref _paintStrength, 0.1f, 10.0f, "%.1f /s");
                 DrawHoverTooltip("Shortcut: 3 / 4");
             }
+            else if (_terrainTool == TerrainTool.Hydraulic)
+            {
+                DrawFieldLabel("Rain Rate");
+                ImGui.SetNextItemWidth(-1);
+                ImGui.SliderFloat("##rainrate", ref _rainRate, 10.0f, 1000.0f, "%.0f drops/s");
+                DrawHoverTooltip("How many droplets fall inside the brush each second");
+            }
             else
             {
                 DrawFieldLabel("Strength");
                 ImGui.SetNextItemWidth(-1);
                 ImGui.SliderFloat("##strength", ref _brushStrength, 0.1f, 20.0f, "%.1f m/s");
                 DrawHoverTooltip("Shortcut: 3 / 4");
+            }
+
+            if (_terrainTool == TerrainTool.Erosion)
+            {
+                DrawFieldLabel("Talus Angle");
+                ImGui.SetNextItemWidth(-1);
+                ImGui.SliderFloat("##talusangle", ref _talusAngleDegrees, 5.0f, 75.0f, "%.0f deg");
+                DrawHoverTooltip("Slopes steeper than this angle erode; material settles below");
             }
 
             DrawFieldLabel("Falloff");
@@ -690,6 +711,8 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
             TerrainTool.Smooth => ApplySmoothTool(deltaSeconds),
             TerrainTool.Flatten => ApplyFlattenTool(deltaSeconds),
             TerrainTool.Paint => ApplyPaintTool(deltaSeconds),
+            TerrainTool.Erosion => ApplyErosionTool(deltaSeconds),
+            TerrainTool.Hydraulic => ApplyHydraulicTool(deltaSeconds),
             _ => ApplyRaiseLowerTool(deltaSeconds)
         };
     }
@@ -745,6 +768,40 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
         return changed;
     }
 
+    private int ApplyErosionTool(float deltaSeconds)
+    {
+        var changed = TerrainBrush.ApplyThermalErosion(_world, _cursor.X, _cursor.Z, CreateBrushProfile(), _talusAngleDegrees, _brushStrength, deltaSeconds);
+        if (changed > 0)
+        {
+            _lastAction = $"Eroded {changed} samples";
+        }
+
+        return changed;
+    }
+
+    private int ApplyHydraulicTool(float deltaSeconds)
+    {
+        _dropletAccumulator += _rainRate * deltaSeconds;
+        var droplets = (int)_dropletAccumulator;
+        if (droplets == 0) return 0;
+
+        _dropletAccumulator -= droplets;
+        var changed = HydraulicErosion.Simulate(
+            _world,
+            _cursor.X,
+            _cursor.Z,
+            _brushRadius,
+            droplets,
+            HydraulicErosionSettings.Default,
+            _dropletRandom.Next());
+        if (changed > 0)
+        {
+            _lastAction = $"Hydraulic erosion: {droplets} droplets";
+        }
+
+        return changed;
+    }
+
     private TerrainBrushProfile CreateBrushProfile()
     {
         return new TerrainBrushProfile(_brushShape, _brushRadius, _brushFalloff, _noiseScale, _noiseAmount);
@@ -755,6 +812,8 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
         TerrainTool.Smooth => "Left-drag smooths terrain. Larger radius blends broader shapes.",
         TerrainTool.Flatten => "Left-drag flattens to the height sampled at stroke start.",
         TerrainTool.Paint => "Left-drag paints terrain color with the selected brush color.",
+        TerrainTool.Erosion => "Left-drag weathers terrain. Slopes steeper than the talus angle shed material into lower neighbours.",
+        TerrainTool.Hydraulic => "Left-drag rains droplets inside the brush. They flow downhill, carving channels and depositing sediment where they slow.",
         _ => "Left-drag raises. Hold Ctrl to lower."
     };
 
@@ -1274,6 +1333,8 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
         TerrainTool.Smooth => "Smooth",
         TerrainTool.Flatten => "Flatten",
         TerrainTool.Paint => "Paint",
+        TerrainTool.Erosion => "Erosion",
+        TerrainTool.Hydraulic => "Hydraulic",
         _ => "Unknown"
     };
 
@@ -1330,6 +1391,8 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
         RaiseLower,
         Smooth,
         Flatten,
-        Paint
+        Paint,
+        Erosion,
+        Hydraulic
     }
 }
