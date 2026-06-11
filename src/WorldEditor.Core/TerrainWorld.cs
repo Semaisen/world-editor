@@ -13,19 +13,23 @@ public sealed class TerrainWorld
     ];
 
     private readonly Dictionary<TerrainCoord, TerrainTile> _tiles = [];
+    private readonly List<TerrainPoi> _pois = [];
 
     public TerrainWorld()
     {
         _tiles.Add(new TerrainCoord(0, 0), TerrainTile.CreateDefault());
     }
 
-    private TerrainWorld(Dictionary<TerrainCoord, TerrainTile> tiles)
+    private TerrainWorld(Dictionary<TerrainCoord, TerrainTile> tiles, IEnumerable<TerrainPoi>? pois = null)
     {
         if (tiles.Count == 0) throw new ArgumentException("A terrain world must contain at least one tile.", nameof(tiles));
         _tiles = tiles;
+        if (pois is not null) _pois.AddRange(pois);
     }
 
     public IReadOnlyDictionary<TerrainCoord, TerrainTile> Tiles => _tiles;
+
+    public IReadOnlyList<TerrainPoi> Pois => _pois;
 
     public IEnumerable<TerrainCoord> Coordinates => _tiles.Keys;
 
@@ -43,9 +47,16 @@ public sealed class TerrainWorld
         return new TerrainWorld(new Dictionary<TerrainCoord, TerrainTile>(tiles));
     }
 
+    public static TerrainWorld FromTiles(Dictionary<TerrainCoord, TerrainTile> tiles, IEnumerable<TerrainPoi> pois)
+    {
+        ArgumentNullException.ThrowIfNull(tiles);
+        ArgumentNullException.ThrowIfNull(pois);
+        return new TerrainWorld(new Dictionary<TerrainCoord, TerrainTile>(tiles), pois);
+    }
+
     public TerrainWorld Clone()
     {
-        return FromTiles(_tiles.ToDictionary(entry => entry.Key, entry => entry.Value.Clone()));
+        return FromTiles(_tiles.ToDictionary(entry => entry.Key, entry => entry.Value.Clone()), _pois);
     }
 
     public TerrainTile GetTile(TerrainCoord coord) => _tiles[coord];
@@ -102,6 +113,31 @@ public sealed class TerrainWorld
     {
         if (!CanRemoveTile(coord)) return false;
         return _tiles.Remove(coord);
+    }
+
+    public TerrainPoi AddPoi(string name, float xMetres, float zMetres, TerrainPoiKind kind = TerrainPoiKind.Generic, string notes = "")
+    {
+        var poi = new TerrainPoi(Guid.NewGuid(), name, xMetres, zMetres, kind, notes);
+        _pois.Add(poi);
+        return poi;
+    }
+
+    public bool UpdatePoi(TerrainPoi poi)
+    {
+        var index = _pois.FindIndex(candidate => candidate.Id == poi.Id);
+        if (index < 0) return false;
+
+        _pois[index] = poi;
+        return true;
+    }
+
+    public bool RemovePoi(Guid id)
+    {
+        var index = _pois.FindIndex(candidate => candidate.Id == id);
+        if (index < 0) return false;
+
+        _pois.RemoveAt(index);
+        return true;
     }
 
     public HashSet<TerrainCoord> GetAddableTileCoords()

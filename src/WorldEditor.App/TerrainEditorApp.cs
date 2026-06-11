@@ -21,6 +21,9 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
     private const float SidePanelWidth = 280.0f;
     private const float MinBrushRadius = 0.1f;
     private const float MaxBrushRadius = 200.0f;
+    private const float PoiSelectRadiusMetres = 8.0f;
+    private const float PoiMarkerHeightMetres = 4.0f;
+    private const float PoiMarkerRadiusMetres = 1.2f;
     private const int MaxHistoryStates = 32;
     private const ImGuiWindowFlags HudWindowFlags =
         ImGuiWindowFlags.NoMove |
@@ -46,6 +49,7 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
     private MeshBuffer? _terrainMesh;
     private MeshBuffer? _brushMesh;
     private MeshBuffer? _tileOverlayMesh;
+    private MeshBuffer? _poiOverlayMesh;
     private MeshBuffer? _characterPreviewMesh;
     private Vector2 _lastMouse;
     private Vector2 _mouse;
@@ -55,6 +59,7 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
     private bool _middleMouseDown;
     private bool _meshDirty = true;
     private bool _tileOverlayDirty = true;
+    private bool _poiOverlayDirty = true;
     private bool _strokeChanged;
     private bool _tileMode;
     private TerrainTool _terrainTool = TerrainTool.RaiseLower;
@@ -73,6 +78,7 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
     private readonly Random _dropletRandom = new();
     private BrushFalloff _brushFalloff = BrushFalloff.Smooth;
     private TerrainViewMode _viewMode = TerrainViewMode.Albedo;
+    private Guid? _selectedPoiId;
     private Vector3 _cursor = new(64, 0, 64);
     private TerrainCoord _cursorTileCoord;
     private Vector2 _cursorLocal;
@@ -190,7 +196,11 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
         {
             HandleTileModeClick();
         }
-        else if (!uiHasMouse && !_tileMode && _leftMouseDown)
+        else if (!uiHasMouse && !_tileMode && _terrainTool == TerrainTool.Poi && _leftMousePressed)
+        {
+            HandlePoiClick();
+        }
+        else if (!uiHasMouse && !_tileMode && _terrainTool != TerrainTool.Poi && _leftMouseDown)
         {
             if (_leftMousePressed)
             {
@@ -209,6 +219,7 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
         UpdateCursor();
         RebuildBrushMesh();
         if (_tileMode && _tileOverlayDirty) RebuildTileOverlayMesh();
+        if (_poiOverlayDirty) RebuildPoiOverlayMesh();
         RebuildCharacterPreviewMesh();
         HandleShortcuts();
         _lastMouse = _mouse;
@@ -249,9 +260,15 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
 
         _shader.SetVector("uColor", new Vector4(AccentColor.X, AccentColor.Y, AccentColor.Z, 1.0f));
         _shader.SetInt("uUseLighting", 0);
-        if (!_tileMode)
+        if (!_tileMode && _terrainTool != TerrainTool.Poi)
         {
             _brushMesh.DrawLines();
+        }
+
+        if (_poiOverlayMesh is not null)
+        {
+            _shader.SetVector("uColor", new Vector4(0.98f, 0.78f, 0.22f, 1.0f));
+            _poiOverlayMesh.DrawLines();
         }
 
         if (_tileMode && _tileOverlayMesh is not null)
@@ -288,6 +305,7 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
         _terrainMesh?.Dispose();
         _brushMesh?.Dispose();
         _tileOverlayMesh?.Dispose();
+        _poiOverlayMesh?.Dispose();
         _characterPreviewMesh?.Dispose();
         _imgui?.Dispose();
         _shader?.Dispose();
@@ -343,8 +361,8 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
                 PushUndoState(_world);
                 _world = TerrainProjectStore.LoadWorld(path);
                 _redoStack.Clear();
-                _meshDirty = true;
-                _tileOverlayDirty = true;
+                _selectedPoiId = null;
+                MarkWorldChanged();
                 _lastAction = "Loaded SampleTerrainProject";
             }
         }
@@ -413,8 +431,8 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
             PushUndoState(_world);
             _world = new TerrainWorld();
             _redoStack.Clear();
-            _meshDirty = true;
-            _tileOverlayDirty = true;
+            _selectedPoiId = null;
+            MarkWorldChanged();
             _lastAction = "Created new flat terrain";
         }
 
@@ -440,8 +458,8 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
                 PushUndoState(_world);
                 _world = TerrainProjectStore.LoadWorld(path);
                 _redoStack.Clear();
-                _meshDirty = true;
-                _tileOverlayDirty = true;
+                _selectedPoiId = null;
+                MarkWorldChanged();
                 _lastAction = "Loaded SampleTerrainProject";
             }
             else
@@ -479,6 +497,7 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
         DrawRailToolButton("@", "Paint", "Left-drag blends color into the terrain", TerrainTool.Paint);
         DrawRailToolButton("%", "Erosion", "Left-drag weathers slopes steeper than the talus angle", TerrainTool.Erosion);
         DrawRailToolButton("*", "Hydraulic", "Left-drag rains droplets that carve channels and deposit sediment", TerrainTool.Hydraulic);
+        DrawRailToolButton("P", "POI", "Click terrain to add or select map markers", TerrainTool.Poi);
 
         ImGui.Separator();
 
@@ -534,6 +553,10 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
             ImGui.PushStyleColor(ImGuiCol.Text, ImGui.GetStyle().Colors[(int)ImGuiCol.TextDisabled]);
             ImGui.TextWrapped("Click a ghost tile to add terrain. Ctrl-click a tile to remove it while the terrain stays connected.");
             ImGui.PopStyleColor();
+        }
+        else if (_terrainTool == TerrainTool.Poi)
+        {
+            DrawPoiPanel();
         }
         else
         {
@@ -643,7 +666,9 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
         DrawStatusDivider();
         ImGui.Text(_tileMode
             ? "Tile Mode"
-            : $"{GetToolName(_terrainTool)}  {_brushRadius:0.0} m");
+            : _terrainTool == TerrainTool.Poi
+                ? $"POI  {_world.Pois.Count} markers"
+                : $"{GetToolName(_terrainTool)}  {_brushRadius:0.0} m");
         DrawStatusDivider();
         ImGui.Text($"Cam {_cameraSpeed:0} m/s");
         DrawStatusDivider();
@@ -655,6 +680,63 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
 
         ImGui.End();
         ImGui.PopStyleVar(2);
+    }
+
+    private void DrawPoiPanel()
+    {
+        DrawSectionHeader("POI", true);
+        ImGui.PushStyleColor(ImGuiCol.Text, ImGui.GetStyle().Colors[(int)ImGuiCol.TextDisabled]);
+        ImGui.TextWrapped("Click terrain to add a POI. Click an existing marker to select it.");
+        ImGui.PopStyleColor();
+
+        DrawSectionHeader("Selected");
+        var poi = GetSelectedPoi();
+        if (poi is null)
+        {
+            ImGui.TextDisabled(_world.Pois.Count == 0 ? "No POIs yet" : "No POI selected");
+            return;
+        }
+
+        DrawFieldLabel("Name");
+        var name = poi.Name;
+        ImGui.SetNextItemWidth(-1);
+        if (ImGui.InputText("##poiname", ref name, 80))
+        {
+            poi = poi with { Name = name };
+            UpdatePoiWithUndo(poi, "Updated POI name");
+        }
+
+        DrawFieldLabel("Kind");
+        var kind = (int)poi.Kind;
+        ImGui.SetNextItemWidth(-1);
+        if (ImGui.Combo("##poikind", ref kind, "Generic\0Landmark\0Settlement\0Resource\0Quest\0Danger\0"))
+        {
+            poi = poi with { Kind = (TerrainPoiKind)kind };
+            UpdatePoiWithUndo(poi, "Updated POI kind");
+        }
+
+        DrawFieldLabel("Notes");
+        var notes = poi.Notes;
+        ImGui.SetNextItemWidth(-1);
+        if (ImGui.InputTextMultiline("##poinotes", ref notes, 512, new Vector2(-1.0f, 90.0f)))
+        {
+            poi = poi with { Notes = notes };
+            UpdatePoiWithUndo(poi, "Updated POI notes");
+        }
+
+        ImGui.Spacing();
+        if (ImGui.Button("Delete POI", new Vector2(-1.0f, 28.0f)))
+        {
+            var before = _world.Clone();
+            if (_world.RemovePoi(poi.Id))
+            {
+                PushUndoState(before);
+                _redoStack.Clear();
+                _selectedPoiId = null;
+                _poiOverlayDirty = true;
+                _lastAction = $"Deleted {poi.Name}";
+            }
+        }
     }
 
     private static void DrawStatusDivider()
@@ -823,6 +905,7 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
         TerrainTool.Paint => "Left-drag paints terrain color with the selected brush color.",
         TerrainTool.Erosion => "Left-drag weathers terrain. Slopes steeper than the talus angle shed material into lower neighbours.",
         TerrainTool.Hydraulic => "Left-drag rains droplets inside the brush. They flow downhill well beyond it, carving channels and depositing sediment where they slow.",
+        TerrainTool.Poi => "Click terrain to add POIs. Click an existing marker to select and edit it.",
         _ => "Left-drag raises. Hold Ctrl to lower."
     };
 
@@ -933,6 +1016,7 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
         _terrainMesh = MeshBuffer.Create(_gl, CollectionsMarshal.AsSpan(vertices), CollectionsMarshal.AsSpan(indices));
         _meshDirty = false;
         _tileOverlayDirty = true;
+        _poiOverlayDirty = true;
     }
 
     private void RebuildBrushMesh()
@@ -1039,6 +1123,59 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
         indices.Add(start);
     }
 
+    private void RebuildPoiOverlayMesh()
+    {
+        if (_gl is null) return;
+
+        if (_world.Pois.Count == 0)
+        {
+            _poiOverlayMesh?.Dispose();
+            _poiOverlayMesh = null;
+            _poiOverlayDirty = false;
+            return;
+        }
+
+        var vertices = new List<float>(_world.Pois.Count * 8 * 10);
+        var indices = new List<uint>(_world.Pois.Count * 14);
+        foreach (var poi in _world.Pois)
+        {
+            AddPoiMarker(vertices, indices, poi);
+        }
+
+        _poiOverlayMesh?.Dispose();
+        _poiOverlayMesh = MeshBuffer.Create(_gl, CollectionsMarshal.AsSpan(vertices), CollectionsMarshal.AsSpan(indices));
+        _poiOverlayDirty = false;
+    }
+
+    private void AddPoiMarker(List<float> vertices, List<uint> indices, TerrainPoi poi)
+    {
+        var start = (uint)(vertices.Count / 10);
+        var groundY = SampleWorldHeight(poi.XMetres, poi.ZMetres, 0.0f) + 0.16f;
+        var topY = groundY + PoiMarkerHeightMetres;
+        var radius = poi.Id == _selectedPoiId ? PoiMarkerRadiusMetres * 1.5f : PoiMarkerRadiusMetres;
+        var color = poi.Id == _selectedPoiId
+            ? new Vector4(1.0f, 0.42f, 0.20f, 1.0f)
+            : new Vector4(0.98f, 0.78f, 0.22f, 1.0f);
+
+        AddLineVertex(vertices, poi.XMetres, groundY, poi.ZMetres, color);
+        AddLineVertex(vertices, poi.XMetres, topY, poi.ZMetres, color);
+        AddLineVertex(vertices, poi.XMetres - radius, topY, poi.ZMetres, color);
+        AddLineVertex(vertices, poi.XMetres + radius, topY, poi.ZMetres, color);
+        AddLineVertex(vertices, poi.XMetres, topY, poi.ZMetres - radius, color);
+        AddLineVertex(vertices, poi.XMetres, topY, poi.ZMetres + radius, color);
+        AddLineVertex(vertices, poi.XMetres - radius, groundY, poi.ZMetres - radius, color);
+        AddLineVertex(vertices, poi.XMetres + radius, groundY, poi.ZMetres + radius, color);
+
+        indices.Add(start);
+        indices.Add(start + 1);
+        indices.Add(start + 2);
+        indices.Add(start + 3);
+        indices.Add(start + 4);
+        indices.Add(start + 5);
+        indices.Add(start + 6);
+        indices.Add(start + 7);
+    }
+
     private static void AddLineVertex(List<float> vertices, float x, float y, float z, Vector4 color)
     {
         vertices.Add(x);
@@ -1069,8 +1206,7 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
             {
                 PushUndoState(before);
                 _redoStack.Clear();
-                _meshDirty = true;
-                _tileOverlayDirty = true;
+                MarkWorldChanged();
                 _lastAction = $"Removed tile {_cursorTileCoord}";
             }
             else
@@ -1088,8 +1224,7 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
             {
                 PushUndoState(before);
                 _redoStack.Clear();
-                _meshDirty = true;
-                _tileOverlayDirty = true;
+                MarkWorldChanged();
                 _lastAction = $"Added tile {_cursorTileCoord}";
             }
         }
@@ -1101,6 +1236,79 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
         {
             _lastAction = "Click an exposed edge tile to add terrain";
         }
+    }
+
+    private void HandlePoiClick()
+    {
+        if (!_cursorHasTile)
+        {
+            _lastAction = "Click terrain to place a POI";
+            return;
+        }
+
+        if (TryFindPoiNearCursor(out var existing))
+        {
+            _selectedPoiId = existing.Id;
+            _poiOverlayDirty = true;
+            _lastAction = $"Selected {existing.Name}";
+            return;
+        }
+
+        var before = _world.Clone();
+        var poi = _world.AddPoi(CreateDefaultPoiName(), _cursor.X, _cursor.Z);
+        PushUndoState(before);
+        _redoStack.Clear();
+        _selectedPoiId = poi.Id;
+        _poiOverlayDirty = true;
+        _lastAction = $"Added {poi.Name}";
+    }
+
+    private bool TryFindPoiNearCursor(out TerrainPoi poi)
+    {
+        var bestDistanceSq = PoiSelectRadiusMetres * PoiSelectRadiusMetres;
+        TerrainPoi? best = null;
+        foreach (var candidate in _world.Pois)
+        {
+            var dx = candidate.XMetres - _cursor.X;
+            var dz = candidate.ZMetres - _cursor.Z;
+            var distanceSq = dx * dx + dz * dz;
+            if (distanceSq <= bestDistanceSq)
+            {
+                bestDistanceSq = distanceSq;
+                best = candidate;
+            }
+        }
+
+        poi = best!;
+        return best is not null;
+    }
+
+    private string CreateDefaultPoiName()
+    {
+        var index = _world.Pois.Count + 1;
+        while (_world.Pois.Any(poi => poi.Name == $"POI {index}"))
+        {
+            index++;
+        }
+
+        return $"POI {index}";
+    }
+
+    private TerrainPoi? GetSelectedPoi()
+    {
+        if (_selectedPoiId is not Guid id) return null;
+        return _world.Pois.FirstOrDefault(poi => poi.Id == id);
+    }
+
+    private void UpdatePoiWithUndo(TerrainPoi updated, string action)
+    {
+        var before = _world.Clone();
+        if (!_world.UpdatePoi(updated)) return;
+
+        PushUndoState(before);
+        _redoStack.Clear();
+        _poiOverlayDirty = true;
+        _lastAction = action;
     }
 
     private void BeginTerrainStroke()
@@ -1174,7 +1382,13 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
     {
         _meshDirty = true;
         _tileOverlayDirty = true;
+        _poiOverlayDirty = true;
         _hasFlattenHeight = false;
+        if (_selectedPoiId is Guid id && _world.Pois.All(poi => poi.Id != id))
+        {
+            _selectedPoiId = null;
+        }
+
         UpdateCursor();
     }
 
@@ -1344,6 +1558,7 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
         TerrainTool.Paint => "Paint",
         TerrainTool.Erosion => "Erosion",
         TerrainTool.Hydraulic => "Hydraulic",
+        TerrainTool.Poi => "POI",
         _ => "Unknown"
     };
 
@@ -1402,6 +1617,7 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
         Flatten,
         Paint,
         Erosion,
-        Hydraulic
+        Hydraulic,
+        Poi
     }
 }

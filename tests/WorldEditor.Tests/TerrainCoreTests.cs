@@ -1,4 +1,5 @@
 using System.Numerics;
+using System.Text.Json;
 using WorldEditor.Core;
 
 namespace WorldEditor.Tests;
@@ -46,6 +47,26 @@ public sealed class TerrainCoreTests
 
         Assert.Equal(2, clone.TileCount);
         Assert.Equal(5.0f, clone.GetTile(new TerrainCoord(1, 0)).GetHeight(2, 2), precision: 5);
+    }
+
+    [Fact]
+    public void WorldSupportsPoiAddUpdateRemoveAndClone()
+    {
+        var world = new TerrainWorld();
+        var poi = world.AddPoi("Camp", 12.0f, 24.0f, TerrainPoiKind.Landmark, "First stop");
+
+        Assert.Single(world.Pois);
+        Assert.Equal("Camp", world.Pois[0].Name);
+        Assert.True(world.UpdatePoi(poi with { Name = "Base Camp", Kind = TerrainPoiKind.Settlement }));
+
+        var clone = world.Clone();
+        Assert.True(world.RemovePoi(poi.Id));
+
+        Assert.Empty(world.Pois);
+        Assert.Single(clone.Pois);
+        Assert.Equal(poi.Id, clone.Pois[0].Id);
+        Assert.Equal("Base Camp", clone.Pois[0].Name);
+        Assert.Equal(TerrainPoiKind.Settlement, clone.Pois[0].Kind);
     }
 
     [Fact]
@@ -151,6 +172,7 @@ public sealed class TerrainCoreTests
             Assert.True(File.Exists(Path.Combine(directory, "terrain.json")));
             Assert.True(File.Exists(Path.Combine(directory, "heightmap.bin")));
             Assert.True(File.Exists(Path.Combine(directory, "albedo.png")));
+            Assert.True(File.Exists(Path.Combine(directory, "pois.json")));
             Assert.True(File.Exists(Path.Combine(directory, "terrain_mesh.glb")));
             Assert.True(File.ReadAllBytes(Path.Combine(directory, "terrain_mesh.glb")).Length > 20);
         }
@@ -486,6 +508,61 @@ public sealed class TerrainCoreTests
     }
 
     [Fact]
+    public void MultiTileProjectRoundTripPreservesPois()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "world-editor-poi-test-" + Guid.NewGuid());
+        var world = new TerrainWorld();
+        Assert.True(world.AddTile(new TerrainCoord(1, 0)));
+        var poi = world.AddPoi("Mine", 520.0f, 18.0f, TerrainPoiKind.Resource, "Iron");
+
+        try
+        {
+            TerrainProjectStore.Save(world, directory);
+            var loaded = TerrainProjectStore.LoadWorld(directory);
+
+            Assert.Single(loaded.Pois);
+            Assert.Equal(poi.Id, loaded.Pois[0].Id);
+            Assert.Equal("Mine", loaded.Pois[0].Name);
+            Assert.Equal(520.0f, loaded.Pois[0].XMetres, precision: 5);
+            Assert.Equal(18.0f, loaded.Pois[0].ZMetres, precision: 5);
+            Assert.Equal(TerrainPoiKind.Resource, loaded.Pois[0].Kind);
+            Assert.Equal("Iron", loaded.Pois[0].Notes);
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void GodotExportWritesPoisWithComputedHeight()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "world-editor-poi-export-" + Guid.NewGuid());
+        var world = TerrainWorld.FromSingleTile(new TerrainTile(4, 4, 1));
+        world.GetTile(new TerrainCoord(0, 0)).SetHeight(2, 3, 7.5f);
+        var poi = world.AddPoi("Vista", 2.0f, 3.0f, TerrainPoiKind.Landmark, "Lookout");
+
+        try
+        {
+            GodotExporter.Export(world, directory);
+            using var document = JsonDocument.Parse(File.ReadAllText(Path.Combine(directory, "pois.json")));
+            var exported = document.RootElement[0];
+
+            Assert.Equal(poi.Id, exported.GetProperty("id").GetGuid());
+            Assert.Equal("Vista", exported.GetProperty("name").GetString());
+            Assert.Equal("Landmark", exported.GetProperty("kind").GetString());
+            Assert.Equal("Lookout", exported.GetProperty("notes").GetString());
+            Assert.Equal(2.0f, exported.GetProperty("position_m").GetProperty("x").GetSingle(), precision: 5);
+            Assert.Equal(7.5f, exported.GetProperty("position_m").GetProperty("y").GetSingle(), precision: 5);
+            Assert.Equal(3.0f, exported.GetProperty("position_m").GetProperty("z").GetSingle(), precision: 5);
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public void LegacySingleTileProjectLoadsAsWorld()
     {
         var directory = Path.Combine(Path.GetTempPath(), "world-editor-legacy-test-" + Guid.NewGuid());
@@ -517,6 +594,7 @@ public sealed class TerrainCoreTests
             var loaded = TerrainProjectStore.LoadWorld(directory);
 
             Assert.Single(loaded.Tiles);
+            Assert.Empty(loaded.Pois);
             Assert.True(loaded.ContainsTile(new TerrainCoord(0, 0)));
             Assert.Equal(7.25f, loaded.GetTile(new TerrainCoord(0, 0)).GetHeight(1, 1), precision: 5);
         }

@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
 
@@ -8,6 +9,11 @@ namespace WorldEditor.Core;
 public static class TerrainProjectStore
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
+
+    static TerrainProjectStore()
+    {
+        JsonOptions.Converters.Add(new JsonStringEnumConverter());
+    }
 
     public static void Save(TerrainTile tile, string projectDirectory)
     {
@@ -33,7 +39,8 @@ public static class TerrainProjectStore
                 .OrderBy(tile => tile.Key.X)
                 .ThenBy(tile => tile.Key.Z)
                 .Select(tile => CreateTileMetadata(tile.Key))
-                .ToList()
+                .ToList(),
+            Pois = world.Pois.Select(CreatePoiMetadata).ToList()
         };
         File.WriteAllText(Path.Combine(projectDirectory, "terrain.json"), JsonSerializer.Serialize(metadata, JsonOptions));
 
@@ -50,12 +57,17 @@ public static class TerrainProjectStore
     public static TerrainWorld LoadWorld(string projectDirectory)
     {
         var metadataPath = Path.Combine(projectDirectory, "terrain.json");
-        var metadata = JsonSerializer.Deserialize<TerrainMetadata>(File.ReadAllText(metadataPath))
+        var metadata = JsonSerializer.Deserialize<TerrainMetadata>(File.ReadAllText(metadataPath), JsonOptions)
             ?? throw new InvalidDataException("terrain.json could not be parsed.");
 
         if (metadata.Tiles is null || metadata.Tiles.Count == 0)
         {
-            return TerrainWorld.FromSingleTile(LoadTile(projectDirectory, metadata, metadata.Heightmap, metadata.Albedo));
+            return TerrainWorld.FromTiles(
+                new Dictionary<TerrainCoord, TerrainTile>
+                {
+                    [new TerrainCoord(0, 0)] = LoadTile(projectDirectory, metadata, metadata.Heightmap, metadata.Albedo)
+                },
+                LoadPois(metadata));
         }
 
         var tiles = new Dictionary<TerrainCoord, TerrainTile>();
@@ -65,7 +77,7 @@ public static class TerrainProjectStore
             tiles.Add(coord, LoadTile(projectDirectory, metadata, tileMetadata.Heightmap, tileMetadata.Albedo));
         }
 
-        return TerrainWorld.FromTiles(tiles);
+        return TerrainWorld.FromTiles(tiles, LoadPois(metadata));
     }
 
     private static TerrainTile LoadTile(string projectDirectory, TerrainMetadata metadata, string heightmap, string albedo)
@@ -91,6 +103,32 @@ public static class TerrainProjectStore
             Heightmap = $"{prefix}_heightmap.bin",
             Albedo = $"{prefix}_albedo.png"
         };
+    }
+
+    private static TerrainPoiMetadata CreatePoiMetadata(TerrainPoi poi) => new()
+    {
+        Id = poi.Id,
+        Name = poi.Name,
+        XMetres = poi.XMetres,
+        ZMetres = poi.ZMetres,
+        Kind = poi.Kind,
+        Notes = poi.Notes
+    };
+
+    private static IEnumerable<TerrainPoi> LoadPois(TerrainMetadata metadata)
+    {
+        if (metadata.Pois is null) yield break;
+
+        foreach (var poi in metadata.Pois)
+        {
+            yield return new TerrainPoi(
+                poi.Id == Guid.Empty ? Guid.NewGuid() : poi.Id,
+                poi.Name,
+                poi.XMetres,
+                poi.ZMetres,
+                poi.Kind,
+                poi.Notes);
+        }
     }
 
     public static void WriteHeightmap(TerrainTile tile, string path)
