@@ -40,7 +40,8 @@ public static class TerrainProjectStore
                 .ThenBy(tile => tile.Key.Z)
                 .Select(tile => CreateTileMetadata(tile.Key))
                 .ToList(),
-            Pois = world.Pois.Select(CreatePoiMetadata).ToList()
+            Pois = world.Pois.Select(CreatePoiMetadata).ToList(),
+            Paths = world.Paths.Select(CreatePathMetadata).ToList()
         };
         File.WriteAllText(Path.Combine(projectDirectory, "terrain.json"), JsonSerializer.Serialize(metadata, JsonOptions));
 
@@ -67,7 +68,8 @@ public static class TerrainProjectStore
                 {
                     [new TerrainCoord(0, 0)] = LoadTile(projectDirectory, metadata, metadata.Heightmap, metadata.Albedo)
                 },
-                LoadPois(metadata));
+                LoadPois(metadata),
+                LoadPaths(metadata));
         }
 
         var tiles = new Dictionary<TerrainCoord, TerrainTile>();
@@ -77,7 +79,7 @@ public static class TerrainProjectStore
             tiles.Add(coord, LoadTile(projectDirectory, metadata, tileMetadata.Heightmap, tileMetadata.Albedo));
         }
 
-        return TerrainWorld.FromTiles(tiles, LoadPois(metadata));
+        return TerrainWorld.FromTiles(tiles, LoadPois(metadata), LoadPaths(metadata));
     }
 
     private static TerrainTile LoadTile(string projectDirectory, TerrainMetadata metadata, string heightmap, string albedo)
@@ -128,6 +130,32 @@ public static class TerrainProjectStore
                 poi.ZMetres,
                 poi.Kind,
                 poi.Notes);
+        }
+    }
+
+    private static TerrainPathMetadata CreatePathMetadata(TerrainPath path) => new()
+    {
+        Id = path.Id,
+        Name = path.Name,
+        Kind = path.Kind,
+        WidthMetres = path.WidthMetres,
+        Points = path.Points
+            .Select(point => new TerrainPathPointMetadata { XMetres = point.XMetres, ZMetres = point.ZMetres })
+            .ToList()
+    };
+
+    private static IEnumerable<TerrainPath> LoadPaths(TerrainMetadata metadata)
+    {
+        if (metadata.Paths is null) yield break;
+
+        foreach (var path in metadata.Paths)
+        {
+            yield return new TerrainPath(
+                path.Id == Guid.Empty ? Guid.NewGuid() : path.Id,
+                path.Name,
+                path.Kind,
+                path.WidthMetres,
+                path.Points.Select(point => new TerrainPathPoint(point.XMetres, point.ZMetres)).ToList());
         }
     }
 

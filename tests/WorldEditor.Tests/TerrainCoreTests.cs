@@ -70,6 +70,30 @@ public sealed class TerrainCoreTests
     }
 
     [Fact]
+    public void WorldSupportsPathAddUpdateRemoveAndClone()
+    {
+        var world = new TerrainWorld();
+        var path = world.AddPath("North Road", TerrainPathKind.Road, 6.0f, [new TerrainPathPoint(1.0f, 2.0f)]);
+        var updatedPoints = path.Points.ToList();
+        updatedPoints.Add(new TerrainPathPoint(3.0f, 4.0f));
+
+        Assert.True(world.UpdatePath(path with { Name = "Old North Road", Points = updatedPoints }));
+        var clone = world.Clone();
+        updatedPoints.Add(new TerrainPathPoint(5.0f, 6.0f));
+        Assert.True(world.UpdatePath(path with { Points = updatedPoints }));
+        Assert.True(world.RemovePath(path.Id));
+
+        Assert.Empty(world.Paths);
+        Assert.Single(clone.Paths);
+        Assert.Equal(path.Id, clone.Paths[0].Id);
+        Assert.Equal("Old North Road", clone.Paths[0].Name);
+        Assert.Equal(TerrainPathKind.Road, clone.Paths[0].Kind);
+        Assert.Equal(6.0f, clone.Paths[0].WidthMetres, precision: 5);
+        Assert.Equal(2, clone.Paths[0].Points.Count);
+        Assert.Equal(3.0f, clone.Paths[0].Points[1].XMetres, precision: 5);
+    }
+
+    [Fact]
     public void RaiseBrushChangesSamplesInsideRadius()
     {
         var tile = new TerrainTile(4, 4, 1);
@@ -173,6 +197,7 @@ public sealed class TerrainCoreTests
             Assert.True(File.Exists(Path.Combine(directory, "heightmap.bin")));
             Assert.True(File.Exists(Path.Combine(directory, "albedo.png")));
             Assert.True(File.Exists(Path.Combine(directory, "pois.json")));
+            Assert.True(File.Exists(Path.Combine(directory, "paths.json")));
             Assert.True(File.Exists(Path.Combine(directory, "terrain_mesh.glb")));
             Assert.True(File.ReadAllBytes(Path.Combine(directory, "terrain_mesh.glb")).Length > 20);
         }
@@ -535,6 +560,38 @@ public sealed class TerrainCoreTests
     }
 
     [Fact]
+    public void MultiTileProjectRoundTripPreservesPaths()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "world-editor-path-test-" + Guid.NewGuid());
+        var world = new TerrainWorld();
+        Assert.True(world.AddTile(new TerrainCoord(1, 0)));
+        var path = world.AddPath(
+            "River Run",
+            TerrainPathKind.River,
+            12.0f,
+            [new TerrainPathPoint(10.0f, 20.0f), new TerrainPathPoint(520.0f, 25.0f)]);
+
+        try
+        {
+            TerrainProjectStore.Save(world, directory);
+            var loaded = TerrainProjectStore.LoadWorld(directory);
+
+            Assert.Single(loaded.Paths);
+            Assert.Equal(path.Id, loaded.Paths[0].Id);
+            Assert.Equal("River Run", loaded.Paths[0].Name);
+            Assert.Equal(TerrainPathKind.River, loaded.Paths[0].Kind);
+            Assert.Equal(12.0f, loaded.Paths[0].WidthMetres, precision: 5);
+            Assert.Equal(2, loaded.Paths[0].Points.Count);
+            Assert.Equal(520.0f, loaded.Paths[0].Points[1].XMetres, precision: 5);
+            Assert.Equal(25.0f, loaded.Paths[0].Points[1].ZMetres, precision: 5);
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public void GodotExportWritesPoisWithComputedHeight()
     {
         var directory = Path.Combine(Path.GetTempPath(), "world-editor-poi-export-" + Guid.NewGuid());
@@ -555,6 +612,39 @@ public sealed class TerrainCoreTests
             Assert.Equal(2.0f, exported.GetProperty("position_m").GetProperty("x").GetSingle(), precision: 5);
             Assert.Equal(7.5f, exported.GetProperty("position_m").GetProperty("y").GetSingle(), precision: 5);
             Assert.Equal(3.0f, exported.GetProperty("position_m").GetProperty("z").GetSingle(), precision: 5);
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void GodotExportWritesPathsWithComputedHeights()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "world-editor-path-export-" + Guid.NewGuid());
+        var world = TerrainWorld.FromSingleTile(new TerrainTile(4, 4, 1));
+        world.GetTile(new TerrainCoord(0, 0)).SetHeight(1, 1, 2.5f);
+        world.GetTile(new TerrainCoord(0, 0)).SetHeight(3, 2, 8.0f);
+        var path = world.AddPath(
+            "Main Road",
+            TerrainPathKind.Road,
+            7.0f,
+            [new TerrainPathPoint(1.0f, 1.0f), new TerrainPathPoint(3.0f, 2.0f)]);
+
+        try
+        {
+            GodotExporter.Export(world, directory);
+            using var document = JsonDocument.Parse(File.ReadAllText(Path.Combine(directory, "paths.json")));
+            var exported = document.RootElement[0];
+
+            Assert.Equal(path.Id, exported.GetProperty("id").GetGuid());
+            Assert.Equal("Main Road", exported.GetProperty("name").GetString());
+            Assert.Equal("Road", exported.GetProperty("kind").GetString());
+            Assert.Equal(7.0f, exported.GetProperty("width_m").GetSingle(), precision: 5);
+            Assert.Equal(1.0f, exported.GetProperty("points")[0].GetProperty("x").GetSingle(), precision: 5);
+            Assert.Equal(2.5f, exported.GetProperty("points")[0].GetProperty("y").GetSingle(), precision: 5);
+            Assert.Equal(8.0f, exported.GetProperty("points")[1].GetProperty("y").GetSingle(), precision: 5);
         }
         finally
         {
@@ -595,6 +685,7 @@ public sealed class TerrainCoreTests
 
             Assert.Single(loaded.Tiles);
             Assert.Empty(loaded.Pois);
+            Assert.Empty(loaded.Paths);
             Assert.True(loaded.ContainsTile(new TerrainCoord(0, 0)));
             Assert.Equal(7.25f, loaded.GetTile(new TerrainCoord(0, 0)).GetHeight(1, 1), precision: 5);
         }

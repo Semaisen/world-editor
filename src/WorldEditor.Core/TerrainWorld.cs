@@ -14,22 +14,26 @@ public sealed class TerrainWorld
 
     private readonly Dictionary<TerrainCoord, TerrainTile> _tiles = [];
     private readonly List<TerrainPoi> _pois = [];
+    private readonly List<TerrainPath> _paths = [];
 
     public TerrainWorld()
     {
         _tiles.Add(new TerrainCoord(0, 0), TerrainTile.CreateDefault());
     }
 
-    private TerrainWorld(Dictionary<TerrainCoord, TerrainTile> tiles, IEnumerable<TerrainPoi>? pois = null)
+    private TerrainWorld(Dictionary<TerrainCoord, TerrainTile> tiles, IEnumerable<TerrainPoi>? pois = null, IEnumerable<TerrainPath>? paths = null)
     {
         if (tiles.Count == 0) throw new ArgumentException("A terrain world must contain at least one tile.", nameof(tiles));
         _tiles = tiles;
         if (pois is not null) _pois.AddRange(pois);
+        if (paths is not null) _paths.AddRange(paths.Select(ClonePath));
     }
 
     public IReadOnlyDictionary<TerrainCoord, TerrainTile> Tiles => _tiles;
 
     public IReadOnlyList<TerrainPoi> Pois => _pois;
+
+    public IReadOnlyList<TerrainPath> Paths => _paths;
 
     public IEnumerable<TerrainCoord> Coordinates => _tiles.Keys;
 
@@ -54,9 +58,17 @@ public sealed class TerrainWorld
         return new TerrainWorld(new Dictionary<TerrainCoord, TerrainTile>(tiles), pois);
     }
 
+    public static TerrainWorld FromTiles(Dictionary<TerrainCoord, TerrainTile> tiles, IEnumerable<TerrainPoi> pois, IEnumerable<TerrainPath> paths)
+    {
+        ArgumentNullException.ThrowIfNull(tiles);
+        ArgumentNullException.ThrowIfNull(pois);
+        ArgumentNullException.ThrowIfNull(paths);
+        return new TerrainWorld(new Dictionary<TerrainCoord, TerrainTile>(tiles), pois, paths);
+    }
+
     public TerrainWorld Clone()
     {
-        return FromTiles(_tiles.ToDictionary(entry => entry.Key, entry => entry.Value.Clone()), _pois);
+        return FromTiles(_tiles.ToDictionary(entry => entry.Key, entry => entry.Value.Clone()), _pois, _paths);
     }
 
     public TerrainTile GetTile(TerrainCoord coord) => _tiles[coord];
@@ -137,6 +149,31 @@ public sealed class TerrainWorld
         if (index < 0) return false;
 
         _pois.RemoveAt(index);
+        return true;
+    }
+
+    public TerrainPath AddPath(string name, TerrainPathKind kind, float widthMetres, IEnumerable<TerrainPathPoint>? points = null)
+    {
+        var path = new TerrainPath(Guid.NewGuid(), name, kind, widthMetres, CopyPoints(points));
+        _paths.Add(path);
+        return path;
+    }
+
+    public bool UpdatePath(TerrainPath path)
+    {
+        var index = _paths.FindIndex(candidate => candidate.Id == path.Id);
+        if (index < 0) return false;
+
+        _paths[index] = ClonePath(path);
+        return true;
+    }
+
+    public bool RemovePath(Guid id)
+    {
+        var index = _paths.FindIndex(candidate => candidate.Id == id);
+        if (index < 0) return false;
+
+        _paths.RemoveAt(index);
         return true;
     }
 
@@ -271,6 +308,16 @@ public sealed class TerrainWorld
         {
             yield return new TerrainCoord(coord.X + offset.X, coord.Z + offset.Z);
         }
+    }
+
+    private static TerrainPath ClonePath(TerrainPath path)
+    {
+        return path with { Points = CopyPoints(path.Points) };
+    }
+
+    private static List<TerrainPathPoint> CopyPoints(IEnumerable<TerrainPathPoint>? points)
+    {
+        return points?.Select(point => point with { }).ToList() ?? [];
     }
 
     private enum Edge

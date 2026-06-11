@@ -26,6 +26,7 @@ public static class GodotExporter
 
         TerrainProjectStore.Save(world, exportDirectory);
         WritePois(world, Path.Combine(exportDirectory, "pois.json"));
+        WritePaths(world, Path.Combine(exportDirectory, "paths.json"));
         foreach (var (coord, tile) in world.Tiles)
         {
             var offsetX = coord.X * tile.WidthMetres;
@@ -53,6 +54,20 @@ public static class GodotExporter
         File.WriteAllText(path, JsonSerializer.Serialize(pois, JsonOptions));
     }
 
+    private static void WritePaths(TerrainWorld world, string path)
+    {
+        var paths = world.Paths.Select(path => new ExportPath(
+            path.Id,
+            path.Name,
+            path.Kind,
+            path.WidthMetres,
+            path.Points
+                .Select(point => new ExportPosition(point.XMetres, SampleWorldHeight(world, point.XMetres, point.ZMetres), point.ZMetres))
+                .ToList()));
+
+        File.WriteAllText(path, JsonSerializer.Serialize(paths, JsonOptions));
+    }
+
     private static float SampleWorldHeight(TerrainWorld world, float worldX, float worldZ)
     {
         var template = world.Tiles.Values.First();
@@ -74,6 +89,13 @@ public static class GodotExporter
         [property: JsonPropertyName("kind")] TerrainPoiKind Kind,
         [property: JsonPropertyName("notes")] string Notes,
         [property: JsonPropertyName("position_m")] ExportPosition Position);
+
+    private sealed record ExportPath(
+        [property: JsonPropertyName("id")] Guid Id,
+        [property: JsonPropertyName("name")] string Name,
+        [property: JsonPropertyName("kind")] TerrainPathKind Kind,
+        [property: JsonPropertyName("width_m")] float WidthMetres,
+        [property: JsonPropertyName("points")] IReadOnlyList<ExportPosition> Points);
 
     private sealed record ExportPosition(
         [property: JsonPropertyName("x")] float X,

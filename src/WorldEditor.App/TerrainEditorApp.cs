@@ -24,6 +24,8 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
     private const float PoiSelectRadiusMetres = 8.0f;
     private const float PoiMarkerHeightMetres = 4.0f;
     private const float PoiMarkerRadiusMetres = 1.2f;
+    private const float PathPointSelectRadiusMetres = 8.0f;
+    private const float PathPointMarkerRadiusMetres = 1.4f;
     private const int MaxHistoryStates = 32;
     private const ImGuiWindowFlags HudWindowFlags =
         ImGuiWindowFlags.NoMove |
@@ -50,6 +52,7 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
     private MeshBuffer? _brushMesh;
     private MeshBuffer? _tileOverlayMesh;
     private MeshBuffer? _poiOverlayMesh;
+    private MeshBuffer? _pathOverlayMesh;
     private MeshBuffer? _characterPreviewMesh;
     private Vector2 _lastMouse;
     private Vector2 _mouse;
@@ -60,6 +63,7 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
     private bool _meshDirty = true;
     private bool _tileOverlayDirty = true;
     private bool _poiOverlayDirty = true;
+    private bool _pathOverlayDirty = true;
     private bool _strokeChanged;
     private bool _tileMode;
     private TerrainTool _terrainTool = TerrainTool.RaiseLower;
@@ -79,6 +83,10 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
     private BrushFalloff _brushFalloff = BrushFalloff.Smooth;
     private TerrainViewMode _viewMode = TerrainViewMode.Albedo;
     private Guid? _selectedPoiId;
+    private Guid? _selectedPathId;
+    private int? _selectedPathPointIndex;
+    private TerrainPathKind _newPathKind = TerrainPathKind.Road;
+    private float _newPathWidth = 6.0f;
     private Vector3 _cursor = new(64, 0, 64);
     private TerrainCoord _cursorTileCoord;
     private Vector2 _cursorLocal;
@@ -200,7 +208,11 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
         {
             HandlePoiClick();
         }
-        else if (!uiHasMouse && !_tileMode && _terrainTool != TerrainTool.Poi && _leftMouseDown)
+        else if (!uiHasMouse && !_tileMode && _terrainTool == TerrainTool.Path && _leftMousePressed)
+        {
+            HandlePathClick();
+        }
+        else if (!uiHasMouse && !_tileMode && _terrainTool != TerrainTool.Poi && _terrainTool != TerrainTool.Path && _leftMouseDown)
         {
             if (_leftMousePressed)
             {
@@ -220,6 +232,7 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
         RebuildBrushMesh();
         if (_tileMode && _tileOverlayDirty) RebuildTileOverlayMesh();
         if (_poiOverlayDirty) RebuildPoiOverlayMesh();
+        if (_pathOverlayDirty) RebuildPathOverlayMesh();
         RebuildCharacterPreviewMesh();
         HandleShortcuts();
         _lastMouse = _mouse;
@@ -260,7 +273,7 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
 
         _shader.SetVector("uColor", new Vector4(AccentColor.X, AccentColor.Y, AccentColor.Z, 1.0f));
         _shader.SetInt("uUseLighting", 0);
-        if (!_tileMode && _terrainTool != TerrainTool.Poi)
+        if (!_tileMode && _terrainTool != TerrainTool.Poi && _terrainTool != TerrainTool.Path)
         {
             _brushMesh.DrawLines();
         }
@@ -269,6 +282,12 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
         {
             _shader.SetVector("uColor", new Vector4(0.98f, 0.78f, 0.22f, 1.0f));
             _poiOverlayMesh.DrawLines();
+        }
+
+        if (_pathOverlayMesh is not null)
+        {
+            _shader.SetVector("uColor", new Vector4(0.95f, 0.62f, 0.24f, 1.0f));
+            _pathOverlayMesh.DrawLines();
         }
 
         if (_tileMode && _tileOverlayMesh is not null)
@@ -306,6 +325,7 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
         _brushMesh?.Dispose();
         _tileOverlayMesh?.Dispose();
         _poiOverlayMesh?.Dispose();
+        _pathOverlayMesh?.Dispose();
         _characterPreviewMesh?.Dispose();
         _imgui?.Dispose();
         _shader?.Dispose();
@@ -362,6 +382,8 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
                 _world = TerrainProjectStore.LoadWorld(path);
                 _redoStack.Clear();
                 _selectedPoiId = null;
+                _selectedPathId = null;
+                _selectedPathPointIndex = null;
                 MarkWorldChanged();
                 _lastAction = "Loaded SampleTerrainProject";
             }
@@ -432,6 +454,8 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
             _world = new TerrainWorld();
             _redoStack.Clear();
             _selectedPoiId = null;
+            _selectedPathId = null;
+            _selectedPathPointIndex = null;
             MarkWorldChanged();
             _lastAction = "Created new flat terrain";
         }
@@ -459,6 +483,8 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
                 _world = TerrainProjectStore.LoadWorld(path);
                 _redoStack.Clear();
                 _selectedPoiId = null;
+                _selectedPathId = null;
+                _selectedPathPointIndex = null;
                 MarkWorldChanged();
                 _lastAction = "Loaded SampleTerrainProject";
             }
@@ -498,6 +524,7 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
         DrawRailToolButton("%", "Erosion", "Left-drag weathers slopes steeper than the talus angle", TerrainTool.Erosion);
         DrawRailToolButton("*", "Hydraulic", "Left-drag rains droplets that carve channels and deposit sediment", TerrainTool.Hydraulic);
         DrawRailToolButton("P", "POI", "Click terrain to add or select map markers", TerrainTool.Poi);
+        DrawRailToolButton("/", "Path", "Click terrain to add road, trail, or river points", TerrainTool.Path);
 
         ImGui.Separator();
 
@@ -557,6 +584,10 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
         else if (_terrainTool == TerrainTool.Poi)
         {
             DrawPoiPanel();
+        }
+        else if (_terrainTool == TerrainTool.Path)
+        {
+            DrawPathPanel();
         }
         else
         {
@@ -668,6 +699,8 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
             ? "Tile Mode"
             : _terrainTool == TerrainTool.Poi
                 ? $"POI  {_world.Pois.Count} markers"
+                : _terrainTool == TerrainTool.Path
+                    ? $"Path  {_world.Paths.Count} paths"
                 : $"{GetToolName(_terrainTool)}  {_brushRadius:0.0} m");
         DrawStatusDivider();
         ImGui.Text($"Cam {_cameraSpeed:0} m/s");
@@ -736,6 +769,84 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
                 _poiOverlayDirty = true;
                 _lastAction = $"Deleted {poi.Name}";
             }
+        }
+    }
+
+    private void DrawPathPanel()
+    {
+        DrawSectionHeader("Path", true);
+        ImGui.PushStyleColor(ImGuiCol.Text, ImGui.GetStyle().Colors[(int)ImGuiCol.TextDisabled]);
+        ImGui.TextWrapped("Click terrain to add points. Click an existing point to select its path.");
+        ImGui.PopStyleColor();
+
+        DrawSectionHeader("New Path");
+        DrawFieldLabel("Kind");
+        var newKind = (int)_newPathKind;
+        ImGui.SetNextItemWidth(-1);
+        if (ImGui.Combo("##newpathkind", ref newKind, "Road\0Trail\0River\0"))
+        {
+            _newPathKind = (TerrainPathKind)newKind;
+        }
+
+        DrawFieldLabel("Width");
+        ImGui.SetNextItemWidth(-1);
+        ImGui.SliderFloat("##newpathwidth", ref _newPathWidth, 1.0f, 40.0f, "%.1f m");
+        if (ImGui.Button("New Path", new Vector2(-1.0f, 28.0f)))
+        {
+            CreateEmptyPath();
+        }
+
+        DrawSectionHeader("Selected");
+        var path = GetSelectedPath();
+        if (path is null)
+        {
+            ImGui.TextDisabled(_world.Paths.Count == 0 ? "No paths yet" : "No path selected");
+            return;
+        }
+
+        DrawFieldLabel("Name");
+        var name = path.Name;
+        ImGui.SetNextItemWidth(-1);
+        if (ImGui.InputText("##pathname", ref name, 80))
+        {
+            path = path with { Name = name };
+            UpdatePathWithUndo(path, "Updated path name");
+        }
+
+        DrawFieldLabel("Kind");
+        var kind = (int)path.Kind;
+        ImGui.SetNextItemWidth(-1);
+        if (ImGui.Combo("##pathkind", ref kind, "Road\0Trail\0River\0"))
+        {
+            path = path with { Kind = (TerrainPathKind)kind };
+            UpdatePathWithUndo(path, "Updated path kind");
+        }
+
+        DrawFieldLabel("Width");
+        var width = path.WidthMetres;
+        ImGui.SetNextItemWidth(-1);
+        if (ImGui.SliderFloat("##pathwidth", ref width, 1.0f, 40.0f, "%.1f m"))
+        {
+            path = path with { WidthMetres = width };
+            UpdatePathWithUndo(path, "Updated path width");
+        }
+
+        var pointLabel = _selectedPathPointIndex is int index && index >= 0 && index < path.Points.Count
+            ? $"Point {index + 1} / {path.Points.Count}  X {path.Points[index].XMetres:0.0}  Z {path.Points[index].ZMetres:0.0}"
+            : $"{path.Points.Count} points";
+        ImGui.TextDisabled(pointLabel);
+
+        ImGui.BeginDisabled(_selectedPathPointIndex is not int selectedIndex || selectedIndex < 0 || selectedIndex >= path.Points.Count || path.Points.Count <= 1);
+        if (ImGui.Button("Delete Point", new Vector2(-1.0f, 28.0f)))
+        {
+            DeleteSelectedPathPoint(path);
+        }
+
+        ImGui.EndDisabled();
+
+        if (ImGui.Button("Delete Path", new Vector2(-1.0f, 28.0f)))
+        {
+            DeleteSelectedPath(path);
         }
     }
 
@@ -906,6 +1017,7 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
         TerrainTool.Erosion => "Left-drag weathers terrain. Slopes steeper than the talus angle shed material into lower neighbours.",
         TerrainTool.Hydraulic => "Left-drag rains droplets inside the brush. They flow downhill well beyond it, carving channels and depositing sediment where they slow.",
         TerrainTool.Poi => "Click terrain to add POIs. Click an existing marker to select and edit it.",
+        TerrainTool.Path => "Click terrain to add road, trail, or river points. Click existing points to select them.",
         _ => "Left-drag raises. Hold Ctrl to lower."
     };
 
@@ -1017,6 +1129,7 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
         _meshDirty = false;
         _tileOverlayDirty = true;
         _poiOverlayDirty = true;
+        _pathOverlayDirty = true;
     }
 
     private void RebuildBrushMesh()
@@ -1145,6 +1258,83 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
         _poiOverlayMesh?.Dispose();
         _poiOverlayMesh = MeshBuffer.Create(_gl, CollectionsMarshal.AsSpan(vertices), CollectionsMarshal.AsSpan(indices));
         _poiOverlayDirty = false;
+    }
+
+    private void RebuildPathOverlayMesh()
+    {
+        if (_gl is null) return;
+
+        if (_world.Paths.Count == 0)
+        {
+            _pathOverlayMesh?.Dispose();
+            _pathOverlayMesh = null;
+            _pathOverlayDirty = false;
+            return;
+        }
+
+        var pointCount = _world.Paths.Sum(path => path.Points.Count);
+        var segmentCount = _world.Paths.Sum(path => Math.Max(0, path.Points.Count - 1));
+        var vertices = new List<float>((pointCount * 4 + segmentCount * 2) * 10);
+        var indices = new List<uint>(pointCount * 4 + segmentCount * 2);
+        foreach (var path in _world.Paths)
+        {
+            AddPathOverlay(vertices, indices, path);
+        }
+
+        _pathOverlayMesh?.Dispose();
+        _pathOverlayMesh = MeshBuffer.Create(_gl, CollectionsMarshal.AsSpan(vertices), CollectionsMarshal.AsSpan(indices));
+        _pathOverlayDirty = false;
+    }
+
+    private void AddPathOverlay(List<float> vertices, List<uint> indices, TerrainPath path)
+    {
+        var pathColor = GetPathColor(path);
+        for (var i = 0; i < path.Points.Count - 1; i++)
+        {
+            var start = (uint)(vertices.Count / 10);
+            AddPathPointVertex(vertices, path.Points[i], pathColor);
+            AddPathPointVertex(vertices, path.Points[i + 1], pathColor);
+            indices.Add(start);
+            indices.Add(start + 1);
+        }
+
+        for (var i = 0; i < path.Points.Count; i++)
+        {
+            var selected = path.Id == _selectedPathId && _selectedPathPointIndex == i;
+            AddPathPointMarker(vertices, indices, path.Points[i], selected ? new Vector4(1.0f, 0.42f, 0.20f, 1.0f) : pathColor);
+        }
+    }
+
+    private void AddPathPointMarker(List<float> vertices, List<uint> indices, TerrainPathPoint point, Vector4 color)
+    {
+        var start = (uint)(vertices.Count / 10);
+        var y = SampleWorldHeight(point.XMetres, point.ZMetres, 0.0f) + 0.24f;
+        var radius = PathPointMarkerRadiusMetres;
+
+        AddLineVertex(vertices, point.XMetres - radius, y, point.ZMetres, color);
+        AddLineVertex(vertices, point.XMetres + radius, y, point.ZMetres, color);
+        AddLineVertex(vertices, point.XMetres, y, point.ZMetres - radius, color);
+        AddLineVertex(vertices, point.XMetres, y, point.ZMetres + radius, color);
+
+        indices.Add(start);
+        indices.Add(start + 1);
+        indices.Add(start + 2);
+        indices.Add(start + 3);
+    }
+
+    private void AddPathPointVertex(List<float> vertices, TerrainPathPoint point, Vector4 color)
+    {
+        AddLineVertex(vertices, point.XMetres, SampleWorldHeight(point.XMetres, point.ZMetres, 0.0f) + 0.2f, point.ZMetres, color);
+    }
+
+    private static Vector4 GetPathColor(TerrainPath path)
+    {
+        return path.Kind switch
+        {
+            TerrainPathKind.Trail => new Vector4(0.46f, 0.72f, 0.36f, 1.0f),
+            TerrainPathKind.River => new Vector4(0.28f, 0.62f, 1.0f, 1.0f),
+            _ => new Vector4(0.95f, 0.62f, 0.24f, 1.0f)
+        };
     }
 
     private void AddPoiMarker(List<float> vertices, List<uint> indices, TerrainPoi poi)
@@ -1311,6 +1501,159 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
         _lastAction = action;
     }
 
+    private void HandlePathClick()
+    {
+        if (!_cursorHasTile)
+        {
+            _lastAction = "Click terrain to place a path point";
+            return;
+        }
+
+        if (TryFindPathPointNearCursor(out var path, out var pointIndex))
+        {
+            _selectedPathId = path.Id;
+            _selectedPathPointIndex = pointIndex;
+            _pathOverlayDirty = true;
+            _lastAction = $"Selected {path.Name} point {pointIndex + 1}";
+            return;
+        }
+
+        var point = new TerrainPathPoint(_cursor.X, _cursor.Z);
+        if (GetSelectedPath() is { } selected)
+        {
+            AppendPointToPath(selected, point);
+        }
+        else
+        {
+            CreatePathWithFirstPoint(point);
+        }
+    }
+
+    private void CreateEmptyPath()
+    {
+        var before = _world.Clone();
+        var path = _world.AddPath(CreateDefaultPathName(), _newPathKind, _newPathWidth);
+        PushUndoState(before);
+        _redoStack.Clear();
+        _selectedPathId = path.Id;
+        _selectedPathPointIndex = null;
+        _pathOverlayDirty = true;
+        _lastAction = $"Created {path.Name}";
+    }
+
+    private void CreatePathWithFirstPoint(TerrainPathPoint point)
+    {
+        var before = _world.Clone();
+        var path = _world.AddPath(CreateDefaultPathName(), _newPathKind, _newPathWidth, [point]);
+        PushUndoState(before);
+        _redoStack.Clear();
+        _selectedPathId = path.Id;
+        _selectedPathPointIndex = 0;
+        _pathOverlayDirty = true;
+        _lastAction = $"Created {path.Name}";
+    }
+
+    private bool TryFindPathPointNearCursor(out TerrainPath path, out int pointIndex)
+    {
+        var bestDistanceSq = PathPointSelectRadiusMetres * PathPointSelectRadiusMetres;
+        TerrainPath? bestPath = null;
+        var bestIndex = -1;
+        foreach (var candidatePath in _world.Paths)
+        {
+            for (var i = 0; i < candidatePath.Points.Count; i++)
+            {
+                var point = candidatePath.Points[i];
+                var dx = point.XMetres - _cursor.X;
+                var dz = point.ZMetres - _cursor.Z;
+                var distanceSq = dx * dx + dz * dz;
+                if (distanceSq <= bestDistanceSq)
+                {
+                    bestDistanceSq = distanceSq;
+                    bestPath = candidatePath;
+                    bestIndex = i;
+                }
+            }
+        }
+
+        path = bestPath!;
+        pointIndex = bestIndex;
+        return bestPath is not null;
+    }
+
+    private void AppendPointToPath(TerrainPath path, TerrainPathPoint point)
+    {
+        var points = path.Points.ToList();
+        points.Add(point);
+        var updated = path with { Points = points };
+        var before = _world.Clone();
+        if (!_world.UpdatePath(updated)) return;
+
+        PushUndoState(before);
+        _redoStack.Clear();
+        _selectedPathId = updated.Id;
+        _selectedPathPointIndex = points.Count - 1;
+        _pathOverlayDirty = true;
+        _lastAction = $"Added point {points.Count} to {updated.Name}";
+    }
+
+    private string CreateDefaultPathName()
+    {
+        var index = _world.Paths.Count + 1;
+        while (_world.Paths.Any(path => path.Name == $"Path {index}"))
+        {
+            index++;
+        }
+
+        return $"Path {index}";
+    }
+
+    private TerrainPath? GetSelectedPath()
+    {
+        if (_selectedPathId is not Guid id) return null;
+        return _world.Paths.FirstOrDefault(path => path.Id == id);
+    }
+
+    private void UpdatePathWithUndo(TerrainPath updated, string action)
+    {
+        var before = _world.Clone();
+        if (!_world.UpdatePath(updated)) return;
+
+        PushUndoState(before);
+        _redoStack.Clear();
+        _pathOverlayDirty = true;
+        _lastAction = action;
+    }
+
+    private void DeleteSelectedPathPoint(TerrainPath path)
+    {
+        if (_selectedPathPointIndex is not int pointIndex || pointIndex < 0 || pointIndex >= path.Points.Count || path.Points.Count <= 1) return;
+
+        var points = path.Points.ToList();
+        points.RemoveAt(pointIndex);
+        var updated = path with { Points = points };
+        var before = _world.Clone();
+        if (!_world.UpdatePath(updated)) return;
+
+        PushUndoState(before);
+        _redoStack.Clear();
+        _selectedPathPointIndex = Math.Min(pointIndex, points.Count - 1);
+        _pathOverlayDirty = true;
+        _lastAction = $"Deleted point from {updated.Name}";
+    }
+
+    private void DeleteSelectedPath(TerrainPath path)
+    {
+        var before = _world.Clone();
+        if (!_world.RemovePath(path.Id)) return;
+
+        PushUndoState(before);
+        _redoStack.Clear();
+        _selectedPathId = null;
+        _selectedPathPointIndex = null;
+        _pathOverlayDirty = true;
+        _lastAction = $"Deleted {path.Name}";
+    }
+
     private void BeginTerrainStroke()
     {
         _strokeBeforeWorld ??= _world.Clone();
@@ -1383,10 +1726,21 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
         _meshDirty = true;
         _tileOverlayDirty = true;
         _poiOverlayDirty = true;
+        _pathOverlayDirty = true;
         _hasFlattenHeight = false;
         if (_selectedPoiId is Guid id && _world.Pois.All(poi => poi.Id != id))
         {
             _selectedPoiId = null;
+        }
+
+        if (_selectedPathId is Guid pathId && _world.Paths.All(path => path.Id != pathId))
+        {
+            _selectedPathId = null;
+            _selectedPathPointIndex = null;
+        }
+        else if (GetSelectedPath() is { } path && _selectedPathPointIndex is int pointIndex && pointIndex >= path.Points.Count)
+        {
+            _selectedPathPointIndex = path.Points.Count == 0 ? null : path.Points.Count - 1;
         }
 
         UpdateCursor();
@@ -1559,6 +1913,7 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
         TerrainTool.Erosion => "Erosion",
         TerrainTool.Hydraulic => "Hydraulic",
         TerrainTool.Poi => "POI",
+        TerrainTool.Path => "Path",
         _ => "Unknown"
     };
 
@@ -1618,6 +1973,7 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
         Paint,
         Erosion,
         Hydraulic,
-        Poi
+        Poi,
+        Path
     }
 }

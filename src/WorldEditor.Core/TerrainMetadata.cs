@@ -39,6 +39,9 @@ public sealed record TerrainMetadata
 
     [JsonPropertyName("pois")]
     public List<TerrainPoiMetadata>? Pois { get; init; }
+
+    [JsonPropertyName("paths")]
+    public List<TerrainPathMetadata>? Paths { get; init; }
 }
 
 public sealed record TerrainTileMetadata
@@ -75,4 +78,31 @@ public sealed record TerrainPoiMetadata
 
     [JsonPropertyName("notes")]
     public string Notes { get; init; } = "";
+}
+
+public sealed record TerrainPathMetadata
+{
+    [JsonPropertyName("id")]
+    public Guid Id { get; init; }
+
+    [JsonPropertyName("name")]
+    public string Name { get; init; } = "";
+
+    [JsonPropertyName("kind")]
+    public TerrainPathKind Kind { get; init; }
+
+    [JsonPropertyName("width_m")]
+    public float WidthMetres { get; init; }
+
+    [JsonPropertyName("points")]
+    public List<TerrainPathPointMetadata> Points { get; init; } = [];
+}
+
+public sealed record TerrainPathPointMetadata
+{
+    [JsonPropertyName("x_m")]
+    public float XMetres { get; init; }
+
+    [JsonPropertyName("z_m")]
+    public float ZMetres { get; init; }
 }
