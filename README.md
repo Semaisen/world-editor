@@ -35,7 +35,7 @@ The terrain preview uses directional lighting, slope shading, and subtle height 
 - Flatten tool + left mouse drag: flatten to the height sampled when the stroke starts
 - Paint tool + left mouse drag: softly blend the selected color into terrain albedo
 - Erosion tool + left mouse drag: weather slopes steeper than the talus angle, moving material into lower neighbours
-- Hydraulic tool + left mouse drag: rain droplets inside the brush that flow downhill, carving channels and depositing sediment (Rain Rate slider controls droplets per second)
+- Hydraulic tool + left mouse drag: rain droplets inside the brush; they flow downhill far beyond it until the water evaporates, carving channels and depositing sediment (Rain Rate slider controls droplets per second)
 - Brush Shape: choose Circle, Square, or Noise footprints for sculpt and paint tools
 - Noise brush: use Noise Scale and Noise Amount to vary brush strength procedurally
 - Tile Mode button: click exposed ghost tiles to add terrain chunks

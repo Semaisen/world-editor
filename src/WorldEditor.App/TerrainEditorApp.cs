@@ -19,6 +19,8 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
     private const float HeaderBarHeight = 44.0f;
     private const float StatusBarHeight = 30.0f;
     private const float SidePanelWidth = 280.0f;
+    private const float MinBrushRadius = 0.1f;
+    private const float MaxBrushRadius = 200.0f;
     private const int MaxHistoryStates = 32;
     private const ImGuiWindowFlags HudWindowFlags =
         ImGuiWindowFlags.NoMove |
@@ -154,8 +156,8 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
         if (_keys.Contains(Key.D)) _camera.Position += _camera.Right * moveSpeed;
         if (_keys.Contains(Key.Q)) _camera.Position -= Vector3.UnitY * moveSpeed;
         if (_keys.Contains(Key.E)) _camera.Position += Vector3.UnitY * moveSpeed;
-        if (!uiHasMouse && _keys.Contains(Key.Number1)) _brushRadius = Math.Max(0.1f, _brushRadius - 8.0f * deltaSeconds);
-        if (!uiHasMouse && _keys.Contains(Key.Number2)) _brushRadius = Math.Min(50.0f, _brushRadius + 8.0f * deltaSeconds);
+        if (!uiHasMouse && _keys.Contains(Key.Number1)) _brushRadius = Math.Max(MinBrushRadius, _brushRadius - 8.0f * deltaSeconds);
+        if (!uiHasMouse && _keys.Contains(Key.Number2)) _brushRadius = Math.Min(MaxBrushRadius, _brushRadius + 8.0f * deltaSeconds);
         if (!uiHasMouse && _keys.Contains(Key.Number3))
         {
             if (_terrainTool == TerrainTool.Paint)
@@ -551,7 +553,7 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
 
             DrawFieldLabel("Radius");
             ImGui.SetNextItemWidth(-1);
-            ImGui.SliderFloat("##radius", ref _brushRadius, 0.1f, 50.0f, "%.1f m");
+            ImGui.SliderFloat("##radius", ref _brushRadius, MinBrushRadius, MaxBrushRadius, "%.1f m");
             DrawHoverTooltip("Shortcut: 1 / 2");
 
             if (_brushShape == TerrainBrushShape.Noise)
@@ -786,13 +788,20 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
         if (droplets == 0) return 0;
 
         _dropletAccumulator -= droplets;
+        // The brush is only the rain origin; droplets flow downhill beyond it until
+        // they evaporate. Bigger brushes carve proportionally wider gullies.
+        var radiusCells = _brushRadius / _world.Tiles.Values.First().ResolutionMetres;
+        var settings = HydraulicErosionSettings.Default with
+        {
+            ErodeRadiusCells = Math.Clamp((int)(radiusCells / 8.0f), 4, 6)
+        };
         var changed = HydraulicErosion.Simulate(
             _world,
             _cursor.X,
             _cursor.Z,
             _brushRadius,
             droplets,
-            HydraulicErosionSettings.Default,
+            settings,
             _dropletRandom.Next());
         if (changed > 0)
         {
@@ -813,7 +822,7 @@ internal sealed unsafe class TerrainEditorApp : IDisposable
         TerrainTool.Flatten => "Left-drag flattens to the height sampled at stroke start.",
         TerrainTool.Paint => "Left-drag paints terrain color with the selected brush color.",
         TerrainTool.Erosion => "Left-drag weathers terrain. Slopes steeper than the talus angle shed material into lower neighbours.",
-        TerrainTool.Hydraulic => "Left-drag rains droplets inside the brush. They flow downhill, carving channels and depositing sediment where they slow.",
+        TerrainTool.Hydraulic => "Left-drag rains droplets inside the brush. They flow downhill well beyond it, carving channels and depositing sediment where they slow.",
         _ => "Left-drag raises. Hold Ctrl to lower."
     };
 

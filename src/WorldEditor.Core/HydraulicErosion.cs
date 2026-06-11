@@ -6,19 +6,23 @@ public sealed record HydraulicErosionSettings
 {
     public static HydraulicErosionSettings Default { get; } = new();
 
-    public int MaxDropletLifetime { get; init; } = 48;
+    /// <summary>
+    /// Safety cap only. Droplets normally end by evaporation (~460 steps at the default
+    /// evaporate speed, roughly 230 m of travel), so they can descend a full hillside.
+    /// </summary>
+    public int MaxDropletLifetime { get; init; } = 512;
     /// <summary>How strongly a droplet keeps its previous direction (0 = always follows the gradient).</summary>
     public float Inertia { get; init; } = 0.05f;
     public float SedimentCapacityFactor { get; init; } = 4.0f;
     public float MinSedimentCapacity { get; init; } = 0.01f;
-    public float ErodeSpeed { get; init; } = 0.3f;
+    public float ErodeSpeed { get; init; } = 0.15f;
     public float DepositSpeed { get; init; } = 0.3f;
-    public float EvaporateSpeed { get; init; } = 0.02f;
+    public float EvaporateSpeed { get; init; } = 0.01f;
     public float Gravity { get; init; } = 4.0f;
     public float InitialWater { get; init; } = 1.0f;
     public float InitialSpeed { get; init; } = 1.0f;
     /// <summary>Radius in heightmap cells over which eroded material is removed, to avoid single-sample pits.</summary>
-    public int ErodeRadiusCells { get; init; } = 3;
+    public int ErodeRadiusCells { get; init; } = 4;
 }
 
 /// <summary>
